@@ -10,6 +10,7 @@ const createEmployee = async (employeeData) => {
     password,
     phone,
     designation,
+    userType,
   } = employeeData;
 
   // Check duplicate employee ID
@@ -40,6 +41,7 @@ const createEmployee = async (employeeData) => {
     password: hashedPassword,
     phone: phone && phone.trim() ? phone.trim() : "-",
     designation,
+    userType,
     status: "Active",
   });
 
@@ -69,7 +71,6 @@ const getEmployeeById = async (employeeId) => {
 };
 
 // Update employee
-// Update employee
 const updateEmployee = async (employeeId, employeeData) => {
   const employee = await Employee.findOne({ employeeId });
 
@@ -85,6 +86,7 @@ const updateEmployee = async (employeeId, employeeData) => {
     password,
     phone,
     designation,
+    userType,
     status,
   } = employeeData;
 
@@ -115,6 +117,10 @@ const updateEmployee = async (employeeId, employeeData) => {
 
   if (designation !== undefined) {
     employee.designation = designation;
+  }
+
+  if (userType !== undefined) {
+    employee.userType = userType;
   }
 
   if (status !== undefined) {
