@@ -4,16 +4,20 @@ const cors = require("cors");
 const employeeRoutes = require("./modules/employees/employee.routes");
 const authRoutes = require("./auth/auth.routes");
 const leaveApplyRoutes = require("./modules/leaveApply/leaveApply.routes");
+const leaveRoutes = require("./modules/leaves/leave.routes");
+const attendanceRoutes = require("./modules/attendance/attendance.routes");
+const holidayRoutes = require("./modules/holidays/holiday.routes");
+const dashboardRoutes = require("./modules/dashboard/dashboard.routes");
+const dailyTaskRouter = require("./modules/dailyTasks/dailyTask.router");
 
 const errorMiddleware = require("./middleware/error.middleware");
 
 const app = express();
 
-// Middleware
 app.use(cors());
+
 app.use(express.json());
 
-// Health check
 app.get("/", (req, res) => {
   res.json({
     success: true,
@@ -21,16 +25,22 @@ app.get("/", (req, res) => {
   });
 });
 
-// Employee routes
 app.use("/api/employees", employeeRoutes);
 
-// Auth routes
+app.use("/api/leaves", leaveRoutes);
+
 app.use("/api", authRoutes);
 
-// Employee Leave Apply routes
 app.use("/api/leave-apply", leaveApplyRoutes);
 
-// Error middleware
+app.use("/api/attendance", attendanceRoutes);
+
+app.use("/api/holidays", holidayRoutes);
+
+app.use("/api/dashboard", dashboardRoutes);
+
 app.use(errorMiddleware);
+
+app.use("/api/daily-tasks", dailyTaskRouter);
 
 module.exports = app;

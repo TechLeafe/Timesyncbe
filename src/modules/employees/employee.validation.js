@@ -1,14 +1,22 @@
-const validateEmployee = (data) => {
+const validateEmployee = (data, isCreate = true) => {
   const errors = {};
 
   const {
+    _id,
     employeeId,
     name,
     email,
     password,
-    phone,
     designation,
+    userType,
   } = data;
+
+  // _id
+  if (!isCreate) {
+    if (!_id || !_id.trim()) {
+      errors._id = "Employee ID (_id) is required";
+    }
+  }
 
   // Employee ID
   if (!employeeId || !employeeId.trim()) {
@@ -32,15 +40,30 @@ const validateEmployee = (data) => {
   }
 
   // Password
-  if (!password || !password.trim()) {
-    errors.password = "Password is required";
-  } else if (!/^\d{6}$/.test(password)) {
-    errors.password = "Password must contain exactly 6 digits";
+  if (isCreate) {
+    // Password required when creating employee
+    if (!password || !password.trim()) {
+      errors.password = "Password is required";
+    } else if (!/^\d{6}$/.test(password)) {
+      errors.password = "Password must contain exactly 6 digits";
+    }
+  } else {
+    // Password optional when updating employee
+    if (password && password.trim()) {
+      if (!/^\d{6}$/.test(password)) {
+        errors.password = "Password must contain exactly 6 digits";
+      }
+    }
   }
 
   // Designation
   if (!designation || !designation.trim()) {
     errors.designation = "Designation is required";
+  }
+
+  // User Type
+  if (userType === undefined || userType === null) {
+    errors.userType = "User type is required";
   }
 
   return {

@@ -1,10 +1,10 @@
 const employeeService = require("./employee.service");
 const validateEmployee = require("./employee.validation");
 
-// CREATE
+// CREATE EMPLOYEE
 const createEmployee = async (req, res, next) => {
   try {
-    const validation = validateEmployee(req.body);
+    const validation = validateEmployee(req.body, true);
 
     if (!validation.isValid) {
       return res.status(400).json({
@@ -16,7 +16,7 @@ const createEmployee = async (req, res, next) => {
 
     const employee = await employeeService.createEmployee(req.body);
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Employee created successfully",
       data: employee,
@@ -26,12 +26,12 @@ const createEmployee = async (req, res, next) => {
   }
 };
 
-// GET ALL
+// GET ALL EMPLOYEES
 const getEmployees = async (req, res, next) => {
   try {
     const employees = await employeeService.getAllEmployees();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: employees,
     });
@@ -40,12 +40,21 @@ const getEmployees = async (req, res, next) => {
   }
 };
 
-// GET ONE
+// VIEW SINGLE EMPLOYEE
 const getEmployee = async (req, res, next) => {
   try {
-    const employee = await employeeService.getEmployeeById(req.params.id);
+    const { user_id } = req.body;
 
-    res.status(200).json({
+    if (!user_id || !user_id.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id is required",
+      });
+    }
+
+    const employee = await employeeService.getEmployeeByUserId(user_id);
+
+    return res.status(200).json({
       success: true,
       data: employee,
     });
@@ -54,10 +63,10 @@ const getEmployee = async (req, res, next) => {
   }
 };
 
-// UPDATE
+// UPDATE EMPLOYEE
 const updateEmployee = async (req, res, next) => {
   try {
-    const validation = validateEmployee(req.body);
+    const validation = validateEmployee(req.body, false);
 
     if (!validation.isValid) {
       return res.status(400).json({
@@ -67,12 +76,9 @@ const updateEmployee = async (req, res, next) => {
       });
     }
 
-    const employee = await employeeService.updateEmployee(
-      req.params.id,
-      req.body
-    );
+    const employee = await employeeService.updateEmployee(req.body);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Employee updated successfully",
       data: employee,
@@ -82,12 +88,21 @@ const updateEmployee = async (req, res, next) => {
   }
 };
 
-// DELETE
+// DELETE EMPLOYEE
 const deleteEmployee = async (req, res, next) => {
   try {
-    const result = await employeeService.deleteEmployee(req.params.id);
+    const { _id } = req.body;
 
-    res.status(200).json({
+    if (!_id || !_id.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "_id is required",
+      });
+    }
+
+    const result = await employeeService.deleteEmployee(_id);
+
+    return res.status(200).json({
       success: true,
       message: result.message,
     });

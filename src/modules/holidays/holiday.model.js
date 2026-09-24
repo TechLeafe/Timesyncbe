@@ -1,55 +1,36 @@
 const mongoose = require("mongoose");
 
-const employeeSchema = new mongoose.Schema(
+const holidaySchema = new mongoose.Schema(
   {
-    user_id: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-    },
-
-    employeeId: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-    },
-
-    name: {
+    holidayName: {
       type: String,
       required: true,
       trim: true,
     },
 
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      lowercase: true,
-    },
-
-    password: {
-      type: String,
-      required: true,
-    },
-
-    phone: {
-      type: String,
-      default: "-",
-      trim: true,
-    },
-
-    designation: {
+    holidayDate: {
       type: String,
       required: true,
       trim: true,
     },
 
-    userType: {
-      type: Number,
+    holidayType: {
+      type: String,
       required: true,
+      enum: ["Public", "Company"],
+      trim: true,
+    },
+
+    companyYear: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    description: {
+      type: String,
+      default: "",
+      trim: true,
     },
 
     status: {
@@ -63,4 +44,19 @@ const employeeSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Employee", employeeSchema);
+// Prevent duplicate holiday entries
+holidaySchema.index(
+  {
+    holidayDate: 1,
+    holidayType: 1,
+    companyYear: 1,
+  },
+  {
+    unique: true,
+  }
+);
+
+module.exports = mongoose.model(
+  "Holiday",
+  holidaySchema
+);

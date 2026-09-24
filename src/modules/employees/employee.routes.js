@@ -8,26 +8,31 @@ const {
   deleteEmployee,
 } = require("./employee.controller");
 
+const authMiddleware = require("../../middleware/auth.middleware");
+
 const router = express.Router();
 
-// CREATE employee
+// JWT authentication for all employee APIs
+router.use(authMiddleware);
+
+// CREATE EMPLOYEE
 // POST /api/employees/create
 router.post("/create", createEmployee);
 
-// LIST employees
+// GET ALL EMPLOYEES
 // GET /api/employees/list
 router.get("/list", getEmployees);
 
-// VIEW single employee
-// GET /api/employees/view/:id
-router.get("/view/:id", getEmployee);
+// VIEW EMPLOYEE
+// POST /api/employees/view
+router.post("/view", getEmployee);
 
-// UPDATE employee
-// POST /api/employees/update/:id
-router.post("/update/:id", updateEmployee);
+// UPDATE EMPLOYEE
+// POST /api/employees/update
+router.post("/update", updateEmployee);
 
-// DELETE employee
-// POST /api/employees/delete/:id
-router.post("/delete/:id", deleteEmployee);
+// DELETE EMPLOYEE
+// POST /api/employees/delete
+router.post("/delete", deleteEmployee);
 
 module.exports = router;
