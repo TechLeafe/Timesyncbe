@@ -15,7 +15,6 @@ const errorMiddleware = require("./middleware/error.middleware");
 const app = express();
 
 app.use(cors());
-
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -26,21 +25,15 @@ app.get("/", (req, res) => {
 });
 
 app.use("/api/employees", employeeRoutes);
-
 app.use("/api/leaves", leaveRoutes);
-
 app.use("/api", authRoutes);
-
 app.use("/api/leave-apply", leaveApplyRoutes);
-
 app.use("/api/attendance", attendanceRoutes);
-
 app.use("/api/holidays", holidayRoutes);
-
 app.use("/api/dashboard", dashboardRoutes);
-
-app.use(errorMiddleware);
-
 app.use("/api/daily-tasks", dailyTaskRouter);
+
+// Error middleware should always be registered LAST
+app.use(errorMiddleware);
 
 module.exports = app;
