@@ -8,6 +8,8 @@ const {
   getDailyAttendance,
   getAttendanceHistory,
   getEmployeeAttendance,
+  getAttendanceApprovals,
+  reviewAttendance,
 } = require("./attendance.controller");
 
 const router = express.Router();
@@ -29,5 +31,9 @@ router.post("/history", getAttendanceHistory);
 
 // Particular employee attendance
 router.post("/employee", getEmployeeAttendance);
+
+// Previous-day attendance approval queue (Admin / HR only)
+router.post("/approvals", getAttendanceApprovals);
+router.post("/review", reviewAttendance);
 
 module.exports = router;

@@ -89,15 +89,22 @@ const getAdminDashboard = async (date) => {
   // Add readable working hours
   const formattedAttendance = todayAttendance.map((attendance) => {
     let workingSeconds = attendance.totalWorkingSeconds;
+    const activeSession = (attendance.sessions || []).find(
+      (session) => !session.checkOutTime
+    );
+    const activeCheckInTime =
+      activeSession?.checkInTime ||
+      (!attendance.checkOutTime ? attendance.checkInTime : null);
 
     // If employee is still working, calculate current elapsed time
     if (
-      attendance.checkInTime &&
+      activeCheckInTime &&
       !attendance.checkOutTime
     ) {
       workingSeconds = Math.floor(
-        (Date.now() - new Date(attendance.checkInTime).getTime()) /
-          1000
+        (attendance.totalWorkingSeconds || 0) +
+          (Date.now() - new Date(activeCheckInTime).getTime()) /
+            1000
       );
     }
 
@@ -243,26 +250,45 @@ const getEmployeeDashboard = async (userId, date) => {
   let todayAttendance = {
     checkInTime: null,
     checkOutTime: null,
+    isCheckedIn: false,
+    isCheckedOut: false,
+    totalWorkingSeconds: 0,
+    currentWorkingSeconds: 0,
     workingHours: "00:00:00",
     status: "Not Checked In",
   };
 
   if (attendance) {
     let workingSeconds = attendance.totalWorkingSeconds || 0;
+    const activeSession = (attendance.sessions || []).find(
+      (session) => !session.checkOutTime
+    );
+    const activeCheckInTime =
+      activeSession?.checkInTime ||
+      (!attendance.checkOutTime ? attendance.checkInTime : null);
 
     if (
-      attendance.checkInTime &&
+      activeCheckInTime &&
       !attendance.checkOutTime
     ) {
       workingSeconds = Math.floor(
-        (Date.now() - new Date(attendance.checkInTime).getTime()) /
-          1000
+        (attendance.totalWorkingSeconds || 0) +
+          (Date.now() - new Date(activeCheckInTime).getTime()) /
+            1000
       );
     }
 
     todayAttendance = {
       checkInTime: attendance.checkInTime,
       checkOutTime: attendance.checkOutTime,
+      isCheckedIn: Boolean(
+        attendance.checkInTime && !attendance.checkOutTime
+      ),
+      isCheckedOut: Boolean(attendance.checkOutTime),
+      activeCheckInTime,
+      totalWorkingSeconds:
+        attendance.totalWorkingSeconds || 0,
+      currentWorkingSeconds: workingSeconds,
       workingHours: getWorkingHours(workingSeconds),
       status: attendance.checkOutTime
         ? "Checked Out"

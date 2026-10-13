@@ -28,7 +28,7 @@ const attendanceSchema = new mongoose.Schema(
 
     checkInTime: {
       type: Date,
-      required: true,
+      default: null,
     },
 
     checkOutTime: {
@@ -40,13 +40,52 @@ const attendanceSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+
+    sessions: [
+      {
+        checkInTime: {
+          type: Date,
+          required: true,
+        },
+        checkOutTime: {
+          type: Date,
+          default: null,
+        },
+        totalWorkingSeconds: {
+          type: Number,
+          default: null,
+        },
+      },
+    ],
+
+    attendanceStatus: {
+      type: String,
+      enum: ["Pending", "Present", "Present Late", "Absent"],
+      default: "Pending",
+    },
+
+    approvalStatus: {
+      type: String,
+      enum: ["Pending", "Approved", "Rejected"],
+      default: "Pending",
+    },
+
+    reviewedBy: {
+      type: String,
+      default: null,
+    },
+
+    reviewedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
   }
 );
 
-// One attendance record per employee per day
+// Keep one daily record per employee; sessions store repeat check-ins.
 attendanceSchema.index(
   {
     user_id: 1,

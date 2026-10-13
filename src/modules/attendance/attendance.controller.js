@@ -230,10 +230,71 @@ const getEmployeeAttendance = async (
   }
 };
 
+const requireReviewer = (req, res) => {
+  const userType = Number(req.user.userType);
+  if (userType === 1 || userType === 2) return true;
+
+  res.status(403).json({
+    success: false,
+    message: "Only HR or Admin can review attendance",
+  });
+  return false;
+};
+
+const getAttendanceApprovals = async (req, res, next) => {
+  if (!requireReviewer(req, res)) return;
+
+  try {
+    const approvals =
+      await attendanceService.getAttendanceApprovals();
+    return res.status(200).json({
+      success: true,
+      message: "Pending attendance approvals fetched successfully",
+      data: approvals,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const reviewAttendance = async (req, res, next) => {
+  if (!requireReviewer(req, res)) return;
+
+  try {
+    const { attendanceId, decision } = req.body;
+    if (
+      typeof attendanceId !== "string" ||
+      !attendanceId.trim() ||
+      !["Approved", "Rejected"].includes(decision)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Attendance ID and an Approved/Rejected decision are required",
+      });
+    }
+
+    const attendance = await attendanceService.reviewAttendance(
+      attendanceId.trim(),
+      decision,
+      req.user.user_id
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Attendance ${decision.toLowerCase()} successfully`,
+      data: attendance,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   checkIn,
   checkOut,
   getDailyAttendance,
   getAttendanceHistory,
   getEmployeeAttendance,
+  getAttendanceApprovals,
+  reviewAttendance,
 };

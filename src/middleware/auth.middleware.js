@@ -11,7 +11,7 @@ const authMiddleware = (req, res, next) => {
         message: "Authorization token is required",
       });
     }
-
+//testing
     // Check Bearer format
     if (!authHeader.startsWith("Bearer ")) {
       return res.status(401).json({
@@ -42,7 +42,7 @@ console.log("MONGO ID:", decoded.id);
 console.log("EMAIL:", decoded.email);
 console.log("USER TYPE:", decoded.userType);
 console.log("================================");
-
+console.log("================================");
 req.user = decoded;
     // Store decoded user information
     req.user = decoded;

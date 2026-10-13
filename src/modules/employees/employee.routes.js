@@ -12,12 +12,19 @@ const authMiddleware = require("../../middleware/auth.middleware");
 
 const router = express.Router();
 
-// JWT authentication for all employee APIs
-router.use(authMiddleware);
+// ==========================================
+// PUBLIC ROUTE (No token required)
+// ==========================================
 
 // CREATE EMPLOYEE
 // POST /api/employees/create
 router.post("/create", createEmployee);
+
+
+// ==========================================
+// PROTECTED ROUTES (JWT token required)
+// ==========================================
+router.use(authMiddleware);
 
 // GET ALL EMPLOYEES
 // GET /api/employees/list
