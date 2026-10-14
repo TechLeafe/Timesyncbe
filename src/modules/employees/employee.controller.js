@@ -90,10 +90,18 @@ const updateEmployee = async (req, res, next) => {
 
 // DELETE EMPLOYEE
 const deleteEmployee = async (req, res, next) => {
+  const userType = Number(req.user.userType);
+  if (userType !== 1 && userType !== 2) {
+    return res.status(403).json({
+      success: false,
+      message: "Only Admin or HR can delete employees",
+    });
+  }
+
   try {
     const { _id } = req.body;
 
-    if (!_id || !_id.trim()) {
+    if (typeof _id !== "string" || !_id.trim()) {
       return res.status(400).json({
         success: false,
         message: "_id is required",

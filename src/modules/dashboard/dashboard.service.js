@@ -13,9 +13,11 @@ const getToday = () => {
 };
 
 const getBusinessYear = (date) => {
-  const year = Number(date.substring(0, 4));
+  const [year, month] = date.split("-").map(Number);
 
-  return `${year}-${year + 1}`;
+  return month >= 4
+    ? `${year}-${year + 1}`
+    : `${year - 1}-${year}`;
 };
 
 const getWorkingHours = (seconds) => {
@@ -124,37 +126,37 @@ const getAdminDashboard = async (date) => {
     rejectedLeaves,
   ] = await Promise.all([
     LeaveApply.countDocuments({
-      status: "pending",
+      status: "Pending",
     }),
 
     LeaveApply.countDocuments({
-      status: "approved",
+      status: "Approved",
     }),
 
     LeaveApply.countDocuments({
-      status: "rejected",
+      status: "Rejected",
     }),
   ]);
 
   const leaveTypeCounts = {
     CL: await LeaveApply.countDocuments({
       leaveType: "CL",
-      status: "approved",
+      status: "Approved",
     }),
 
     SL: await LeaveApply.countDocuments({
       leaveType: "SL",
-      status: "approved",
+      status: "Approved",
     }),
 
     COMP_OFF: await LeaveApply.countDocuments({
       leaveType: "COMP_OFF",
-      status: "approved",
+      status: "Approved",
     }),
 
     PERMISSION: await LeaveApply.countDocuments({
       leaveType: "PERMISSION",
-      status: "approved",
+      status: "Approved",
     }),
   };
 
@@ -312,19 +314,20 @@ const getEmployeeDashboard = async (userId, date) => {
 
   const approvedLeaves = await LeaveApply.find({
     user_id: userId,
-    status: "approved",
+    businessYear,
+    status: "Approved",
   })
-    .select("leaveType totalDays totalHours fromDate toDate fromTime toTime")
+    .select("leaveType totalDays totalHours fromDate")
     .lean();
 
   let usedCL = 0;
   let usedSL = 0;
   let usedCompOff = 0;
-  let usedPermission = 0;
+  const selectedMonth = selectedDate.slice(0, 7);
+  let usedPermissions = 0;
 
   approvedLeaves.forEach((leave) => {
     const days = Number(leave.totalDays || 0);
-    const hours = Number(leave.totalHours || 0);
 
     switch (leave.leaveType) {
       case "CL":
@@ -340,7 +343,13 @@ const getEmployeeDashboard = async (userId, date) => {
         break;
 
       case "PERMISSION":
-        usedPermission += hours;
+        if (
+          leave.fromDate &&
+          new Date(leave.fromDate).toISOString().slice(0, 7) ===
+            selectedMonth
+        ) {
+          usedPermissions += 1;
+        }
         break;
 
       default:
@@ -375,17 +384,17 @@ const getEmployeeDashboard = async (userId, date) => {
   ] = await Promise.all([
     LeaveApply.countDocuments({
       user_id: userId,
-      status: "pending",
+      status: "Pending",
     }),
 
     LeaveApply.countDocuments({
       user_id: userId,
-      status: "approved",
+      status: "Approved",
     }),
 
     LeaveApply.countDocuments({
       user_id: userId,
-      status: "rejected",
+      status: "Rejected",
     }),
   ]);
 
@@ -493,9 +502,9 @@ const getEmployeeDashboard = async (userId, date) => {
 
       permissions: {
         allocated: permissionAllocated,
-        used: usedPermission,
+        used: usedPermissions,
         available: Math.max(
-          permissionAllocated - usedPermission,
+          permissionAllocated - usedPermissions,
           0
         ),
       },
