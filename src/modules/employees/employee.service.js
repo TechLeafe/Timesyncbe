@@ -23,6 +23,8 @@ const generateUserId = async () => {
 
 // CREATE EMPLOYEE
 const createEmployee = async (employeeData) => {
+  
+
   const {
     employeeId,
     name,
@@ -30,8 +32,18 @@ const createEmployee = async (employeeData) => {
     password,
     phone,
     designation,
+    team,
     userType,
   } = employeeData;
+
+  // Validate Team before saving
+  if (typeof team !== "string" || !team.trim()) {
+    const error = new Error("Team Name is required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  console.log("CREATED EMPLOYEE TEAM:", team.trim());
 
   // Check duplicate Employee ID
   const existingEmployee = await Employee.findOne({
@@ -61,7 +73,6 @@ const createEmployee = async (employeeData) => {
   // Extra safety check
   while (await Employee.findOne({ user_id })) {
     const match = user_id.match(/USR(\d+)/);
-
     const nextNumber = parseInt(match[1], 10) + 1;
 
     user_id = `USR${String(nextNumber).padStart(6, "0")}`;
@@ -79,13 +90,16 @@ const createEmployee = async (employeeData) => {
     password: hashedPassword,
     phone: phone && phone.trim() ? phone.trim() : "-",
     designation,
+    team: team.trim(),
     userType,
     status: "Active",
   });
 
-  // Don't return password
-  const employeeResponse = employee.toObject();
+  console.log("SAVED TEAM:", employee.team);
+  console.log("SAVED EMPLOYEE:", employee.toObject());
 
+  // Return employee without password
+  const employeeResponse = employee.toObject();
   delete employeeResponse.password;
 
   return employeeResponse;
@@ -123,18 +137,19 @@ const updateEmployee = async (employeeData) => {
     password,
     phone,
     designation,
+    team,
     userType,
     status,
   } = employeeData;
 
-  // Check MongoDB ObjectId
+  // Check valid MongoDB ObjectId
   if (!mongoose.Types.ObjectId.isValid(_id)) {
     const error = new Error("Invalid employee ID");
     error.statusCode = 400;
     throw error;
   }
 
-  // Find employee using _id from payload
+  // Find employee
   const employee = await Employee.findById(_id);
 
   if (!employee) {
@@ -193,6 +208,17 @@ const updateEmployee = async (employeeData) => {
     employee.designation = designation.trim();
   }
 
+  // Update Team
+  if (team !== undefined) {
+    if (typeof team !== "string" || !team.trim()) {
+      const error = new Error("Team Name is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    employee.team = team.trim();
+  }
+
   // Update User Type
   if (userType !== undefined) {
     employee.userType = userType;
@@ -208,13 +234,18 @@ const updateEmployee = async (employeeData) => {
     employee.password = await bcrypt.hash(password, 10);
   }
 
-  // user_id is intentionally NOT updated
-
+  // Save employee
   await employee.save();
 
-  // Return updated employee without password
+  console.log("SAVED TEAM AFTER UPDATE:", employee.team);
+
+  // Fetch saved employee without password
   const updatedEmployee = await Employee.findById(_id)
-    .select("-password");
+    .select("-password")
+    .lean();
+
+  console.log("TEAM AFTER FETCHING:", updatedEmployee?.team);
+  console.log("UPDATED EMPLOYEE:", updatedEmployee);
 
   return updatedEmployee;
 };

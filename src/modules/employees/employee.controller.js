@@ -13,7 +13,8 @@ const createEmployee = async (req, res, next) => {
         errors: validation.errors,
       });
     }
-
+    
+    
     const employee = await employeeService.createEmployee(req.body);
 
     return res.status(201).json({

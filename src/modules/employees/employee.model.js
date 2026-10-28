@@ -46,6 +46,12 @@ const employeeSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    
+    team: {
+      type: String,
+      required: true,
+      trim: true,
+    },
 
     userType: {
       type: Number,
