@@ -24,9 +24,15 @@ app.get("/", (req, res) => {
   });
 });
 
+// Existing module routes
 app.use("/api/employees", employeeRoutes);
-app.use("/api/leaves", leaveRoutes);
+
+// Authentication routes
+app.use("/api/auth", authRoutes);
 app.use("/api", authRoutes);
+console.log("Auth routes registered: POST /api/login ");
+
+app.use("/api/leaves", leaveRoutes);
 app.use("/api/leave-apply", leaveApplyRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/holidays", holidayRoutes);
@@ -36,4 +42,4 @@ app.use("/api/daily-tasks", dailyTaskRouter);
 // Error middleware should always be registered LAST
 app.use(errorMiddleware);
 
-module.exports = app;
+module.exports = app

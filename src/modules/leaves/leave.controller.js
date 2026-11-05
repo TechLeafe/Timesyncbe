@@ -119,16 +119,20 @@ const updateLeave = async (req, res, next) => {
 // Delete leave policy
 const deleteLeave = async (req, res, next) => {
     try {
-        const { _id } = req.body;
+        const { _id, policyName, businessYear } = req.body;
 
-        if (!_id) {
+        if (!_id && (!policyName || !businessYear)) {
             return res.status(400).json({
                 success: false,
-                message: "_id is required"
+                message: "_id or policyName and businessYear are required"
             });
         }
 
-        const leave = await leaveService.deleteLeave(_id);
+        const leave = await leaveService.deleteLeave(
+            _id,
+            policyName,
+            businessYear
+        );
 
         if (!leave) {
             return res.status(404).json({

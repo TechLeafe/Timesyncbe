@@ -31,12 +31,12 @@ const validateCreateHoliday = (data) => {
     errors.holidayType =
       "Holiday type is required";
   } else if (
-    !["Public", "Company"].includes(
+    !["Public", "Company", "Working Day"].includes(
       data.holidayType
     )
   ) {
     errors.holidayType =
-      "Holiday type must be Public or Company";
+      "Holiday type must be Public, Company, or Working Day";
   }
 
   if (
@@ -101,12 +101,12 @@ const validateHolidayFilter = (data) => {
   if (
     data.holidayType !== undefined &&
     data.holidayType !== "" &&
-    !["Public", "Company"].includes(
+    !["Public", "Company", "Working Day"].includes(
       data.holidayType
     )
   ) {
     errors.holidayType =
-      "Holiday type must be Public or Company";
+      "Holiday type must be Public, Company, or Working Day";
   }
 
   return {

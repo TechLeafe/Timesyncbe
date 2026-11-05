@@ -294,7 +294,7 @@ const getEmployeeDashboard = async (userId, date) => {
       workingHours: getWorkingHours(workingSeconds),
       status: attendance.checkOutTime
         ? "Checked Out"
-        : "Currently Working",
+        : "Checked In",
     };
   }
 
@@ -343,12 +343,13 @@ const getEmployeeDashboard = async (userId, date) => {
         break;
 
       case "PERMISSION":
+      case "Permission":
         if (
           leave.fromDate &&
           new Date(leave.fromDate).toISOString().slice(0, 7) ===
             selectedMonth
         ) {
-          usedPermissions += 1;
+          usedPermissions += Number(leave.totalHours) || 0;
         }
         break;
 
@@ -369,9 +370,7 @@ const getEmployeeDashboard = async (userId, date) => {
     ? leavePolicy.compensatoryOff
     : 0;
 
-  const permissionAllocated = leavePolicy
-    ? leavePolicy.permissionsPerMonth
-    : 0;
+  const permissionAllocated = 4;
 
   // --------------------------------------------------
   // LEAVE REQUEST SUMMARY

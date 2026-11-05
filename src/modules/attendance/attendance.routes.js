@@ -5,6 +5,7 @@ const authMiddleware = require("../../middleware/auth.middleware");
 const {
   checkIn,
   checkOut,
+  getAttendanceCronStatus,
   getDailyAttendance,
   getAttendanceHistory,
   getEmployeeAttendance,
@@ -22,6 +23,9 @@ router.post("/check-in", checkIn);
 
 // Check-out
 router.post("/check-out", checkOut);
+
+// Cron health/status (Admin / HR only)
+router.get("/cron-status", getAttendanceCronStatus);
 
 // Daily attendance
 router.post("/daily", getDailyAttendance);

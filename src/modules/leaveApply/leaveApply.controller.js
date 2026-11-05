@@ -68,6 +68,13 @@ const updateLeave = async (req, res, next) => {
 // 4. Review Leave (HR / Admin Status Update)
 const reviewLeave = async (req, res, next) => {
   try {
+    if (![1, 2].includes(Number(req.user.userType))) {
+      return res.status(403).json({
+        success: false,
+        message: "Only HR or Admin can review leave applications",
+      });
+    }
+
     const { leaveId, status, rejectionReason } = req.body;
 
     if (!leaveId || !status) {

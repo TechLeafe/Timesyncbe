@@ -41,5 +41,6 @@ router.post("/update", updateEmployee);
 // DELETE EMPLOYEE
 // POST /api/employees/delete
 router.post("/delete", deleteEmployee);
+router.put("/:user_id", updateEmployee);
 
 module.exports = router;

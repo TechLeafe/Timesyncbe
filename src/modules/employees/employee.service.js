@@ -30,13 +30,11 @@ const createEmployee = async (employeeData) => {
     password,
     phone,
     designation,
+    team,
     userType,
   } = employeeData;
 
-  // Check duplicate Employee ID
-  const existingEmployee = await Employee.findOne({
-    employeeId,
-  });
+  const existingEmployee = await Employee.findOne({ employeeId });
 
   if (existingEmployee) {
     const error = new Error("Employee ID already exists");
@@ -44,7 +42,6 @@ const createEmployee = async (employeeData) => {
     throw error;
   }
 
-  // Check duplicate Email
   const existingEmail = await Employee.findOne({
     email: email.toLowerCase(),
   });
@@ -55,22 +52,17 @@ const createEmployee = async (employeeData) => {
     throw error;
   }
 
-  // Generate unique User ID
   let user_id = await generateUserId();
 
-  // Extra safety check
   while (await Employee.findOne({ user_id })) {
     const match = user_id.match(/USR(\d+)/);
-
     const nextNumber = parseInt(match[1], 10) + 1;
 
     user_id = `USR${String(nextNumber).padStart(6, "0")}`;
   }
 
-  // Hash password
   const hashedPassword = await bcrypt.hash(password, 10);
 
-  // Create employee
   const employee = await Employee.create({
     user_id,
     employeeId,
@@ -79,13 +71,12 @@ const createEmployee = async (employeeData) => {
     password: hashedPassword,
     phone: phone && phone.trim() ? phone.trim() : "-",
     designation,
+    team: team || null,
     userType,
     status: "Active",
   });
 
-  // Don't return password
   const employeeResponse = employee.toObject();
-
   delete employeeResponse.password;
 
   return employeeResponse;
@@ -95,6 +86,7 @@ const createEmployee = async (employeeData) => {
 const getAllEmployees = async () => {
   return await Employee.find()
     .select("-password")
+    .populate("team", "name")
     .sort({ createdAt: -1 });
 };
 
@@ -102,7 +94,9 @@ const getAllEmployees = async () => {
 const getEmployeeByUserId = async (user_id) => {
   const employee = await Employee.findOne({
     user_id: user_id.trim(),
-  }).select("-password");
+  })
+    .select("-password")
+    .populate("team", "name");
 
   if (!employee) {
     const error = new Error("Employee not found");
@@ -123,18 +117,17 @@ const updateEmployee = async (employeeData) => {
     password,
     phone,
     designation,
+    team,
     userType,
     status,
   } = employeeData;
 
-  // Check MongoDB ObjectId
   if (!mongoose.Types.ObjectId.isValid(_id)) {
     const error = new Error("Invalid employee ID");
     error.statusCode = 400;
     throw error;
   }
 
-  // Find employee using _id from payload
   const employee = await Employee.findById(_id);
 
   if (!employee) {
@@ -143,7 +136,7 @@ const updateEmployee = async (employeeData) => {
     throw error;
   }
 
-  // Check duplicate Employee ID
+  // Update Employee ID
   if (employeeId && employeeId !== employee.employeeId) {
     const existingEmployeeId = await Employee.findOne({
       employeeId,
@@ -159,11 +152,8 @@ const updateEmployee = async (employeeData) => {
     employee.employeeId = employeeId;
   }
 
-  // Check duplicate Email
-  if (
-    email &&
-    email.toLowerCase() !== employee.email.toLowerCase()
-  ) {
+  // Update Email
+  if (email && email.toLowerCase() !== employee.email.toLowerCase()) {
     const existingEmail = await Employee.findOne({
       email: email.toLowerCase(),
       _id: { $ne: _id },
@@ -188,9 +178,14 @@ const updateEmployee = async (employeeData) => {
     employee.phone = phone.trim() || "-";
   }
 
-  // Update Designation
+  // Update Designation / Role
   if (designation !== undefined) {
     employee.designation = designation.trim();
+  }
+
+  // Update Team
+  if (team !== undefined) {
+    employee.team = team || null;
   }
 
   // Update User Type
@@ -203,25 +198,21 @@ const updateEmployee = async (employeeData) => {
     employee.status = status;
   }
 
-  // Update Password only when provided
+  // Update Password
   if (password && password.trim()) {
     employee.password = await bcrypt.hash(password, 10);
   }
 
-  // user_id is intentionally NOT updated
-
   await employee.save();
 
   // Return updated employee without password
-  const updatedEmployee = await Employee.findById(_id)
-    .select("-password");
-
-  return updatedEmployee;
+  return await Employee.findById(_id)
+    .select("-password")
+    .populate("team", "name");
 };
 
 // DELETE EMPLOYEE
 const deleteEmployee = async (_id) => {
-  // Check valid MongoDB ObjectId
   if (!mongoose.Types.ObjectId.isValid(_id)) {
     const error = new Error("Invalid employee ID");
     error.statusCode = 400;

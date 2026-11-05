@@ -55,17 +55,41 @@ const validateLeaveApply = (data, isUpdate = false) => {
   // PERMISSION validation
   if (leaveType === "PERMISSION") {
     if (!fromDate) errors.fromDate = "Permission date is required";
+    else if (isNaN(new Date(fromDate).getTime())) {
+      errors.fromDate = "Invalid permission date";
+    }
     if (!fromTime) errors.fromTime = "From time is required";
     if (!toTime) errors.toTime = "To time is required";
 
     if (fromTime && toTime) {
       const fromParts = fromTime.split(":").map(Number);
       const toParts = toTime.split(":").map(Number);
-      if (fromParts.length !== 2 || toParts.length !== 2 || fromParts.some(isNaN) || toParts.some(isNaN)) {
+      if (
+        fromParts.length !== 2 ||
+        toParts.length !== 2 ||
+        fromParts.some((value) => !Number.isInteger(value)) ||
+        toParts.some((value) => !Number.isInteger(value)) ||
+        fromParts[0] < 0 ||
+        fromParts[0] > 23 ||
+        toParts[0] < 0 ||
+        toParts[0] > 23 ||
+        fromParts[1] < 0 ||
+        fromParts[1] > 59 ||
+        toParts[1] < 0 ||
+        toParts[1] > 59
+      ) {
         errors.fromTime = "Invalid time format";
         errors.toTime = "Invalid time format";
       } else if (toParts[0] * 60 + toParts[1] <= fromParts[0] * 60 + fromParts[1]) {
         errors.toTime = "To time must be after From time";
+      } else {
+        const durationMinutes =
+          toParts[0] * 60 + toParts[1] -
+          (fromParts[0] * 60 + fromParts[1]);
+        if (![30, 60, 90, 120].includes(durationMinutes)) {
+          errors.toTime =
+            "Permission duration must be 30 minutes, 1 hour, 1.5 hours, or 2 hours";
+        }
       }
     }
   }

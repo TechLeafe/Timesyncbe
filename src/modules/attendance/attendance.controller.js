@@ -1,4 +1,6 @@
 const attendanceService = require("./attendance.service");
+const attendanceCronStatus = require("./attendanceCronStatus");
+const attendanceScheduler = require("./attendanceScheduler");
 
 const {
   validateAttendancePayload,
@@ -76,6 +78,28 @@ const checkOut = async (req, res, next) => {
   }
 };
 
+// ATTENDANCE CRON STATUS (Admin / HR only)
+const getAttendanceCronStatus = async (req, res) => {
+  const userType = Number(req.user.userType);
+
+  if (userType !== 1 && userType !== 2) {
+    return res.status(403).json({
+      success: false,
+      message: "Only Admin and HR can view attendance cron status",
+    });
+  }
+
+  await attendanceScheduler.ensureDueFinalization();
+  const data = attendanceCronStatus.getStatus();
+  return res.status(200).json({
+    success: true,
+    message: data.scheduled
+      ? "Attendance cron is scheduled"
+      : "Attendance cron is not scheduled",
+    data,
+  });
+};
+
 // DAILY ATTENDANCE
 const getDailyAttendance = async (
   req,
@@ -135,6 +159,12 @@ const getAttendanceHistory = async (
         message: "Validation failed",
         errors: validation.errors,
       });
+    }
+
+    const finalization =
+      await attendanceScheduler.ensureDueFinalization();
+    if (finalization.error) {
+      return next(finalization.error);
     }
 
     const user_id =
@@ -292,6 +322,7 @@ const reviewAttendance = async (req, res, next) => {
 module.exports = {
   checkIn,
   checkOut,
+  getAttendanceCronStatus,
   getDailyAttendance,
   getAttendanceHistory,
   getEmployeeAttendance,

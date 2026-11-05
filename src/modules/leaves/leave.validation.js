@@ -26,6 +26,11 @@ const validateLeave = (data) => {
             data[field] < 0
         ) {
             errors[field] = `${field} must be a valid number`;
+        } else if (
+            field === "permissionsPerMonth" &&
+            data[field] !== 4
+        ) {
+            errors[field] = "Monthly permission allowance is fixed at 4 hours";
         }
     });
 

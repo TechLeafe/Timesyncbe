@@ -28,6 +28,14 @@ const createEmployee = async (req, res, next) => {
 
 // GET ALL EMPLOYEES
 const getEmployees = async (req, res, next) => {
+  const userType = Number(req.user.userType);
+  if (userType !== 1 && userType !== 2) {
+    return res.status(403).json({
+      success: false,
+      message: "Only Admin or HR can view all employees",
+    });
+  }
+
   try {
     const employees = await employeeService.getAllEmployees();
 
@@ -76,7 +84,11 @@ const updateEmployee = async (req, res, next) => {
       });
     }
 
-    const employee = await employeeService.updateEmployee(req.body);
+    const employee = await employeeService.updateEmployee({
+      ...req.body,
+      team: req.body.team,
+      designation: req.body.designation,
+    });
 
     return res.status(200).json({
       success: true,
@@ -87,7 +99,6 @@ const updateEmployee = async (req, res, next) => {
     next(error);
   }
 };
-
 // DELETE EMPLOYEE
 const deleteEmployee = async (req, res, next) => {
   const userType = Number(req.user.userType);
