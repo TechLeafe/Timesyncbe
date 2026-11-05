@@ -8,6 +8,7 @@ const validateEmployee = (data, isCreate = true) => {
     email,
     password,
     designation,
+    team,
     userType,
   } = data;
 
@@ -59,6 +60,11 @@ const validateEmployee = (data, isCreate = true) => {
   // Designation
   if (!designation || !designation.trim()) {
     errors.designation = "Designation is required";
+  }
+
+  // Team
+  if (typeof team !== "string" || !team.trim()) {
+    errors.team = "Team Name is required";
   }
 
   // User Type

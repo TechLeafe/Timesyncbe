@@ -465,6 +465,8 @@ const getEmployeeDashboard = async (userId, date) => {
       name: employee.name,
       email: employee.email,
       designation: employee.designation,
+      team: employee.team || "",
+      status: employee.status,
     },
 
     selectedDate,

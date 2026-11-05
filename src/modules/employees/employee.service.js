@@ -23,6 +23,8 @@ const generateUserId = async () => {
 
 // CREATE EMPLOYEE
 const createEmployee = async (employeeData) => {
+  
+
   const {
     employeeId,
     name,
@@ -34,7 +36,19 @@ const createEmployee = async (employeeData) => {
     userType,
   } = employeeData;
 
-  const existingEmployee = await Employee.findOne({ employeeId });
+  // Validate Team before saving
+  if (typeof team !== "string" || !team.trim()) {
+    const error = new Error("Team Name is required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  console.log("CREATED EMPLOYEE TEAM:", team.trim());
+
+  // Check duplicate Employee ID
+  const existingEmployee = await Employee.findOne({
+    employeeId,
+  });
 
   if (existingEmployee) {
     const error = new Error("Employee ID already exists");
@@ -71,7 +85,7 @@ const createEmployee = async (employeeData) => {
     password: hashedPassword,
     phone: phone && phone.trim() ? phone.trim() : "-",
     designation,
-    team: team || null,
+    team: team.trim(),
     userType,
     status: "Active",
   });
@@ -122,12 +136,14 @@ const updateEmployee = async (employeeData) => {
     status,
   } = employeeData;
 
+  // Check valid MongoDB ObjectId
   if (!mongoose.Types.ObjectId.isValid(_id)) {
     const error = new Error("Invalid employee ID");
     error.statusCode = 400;
     throw error;
   }
 
+  // Find employee
   const employee = await Employee.findById(_id);
 
   if (!employee) {
@@ -185,7 +201,13 @@ const updateEmployee = async (employeeData) => {
 
   // Update Team
   if (team !== undefined) {
-    employee.team = team || null;
+    if (typeof team !== "string" || !team.trim()) {
+      const error = new Error("Team Name is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    employee.team = team.trim();
   }
 
   // Update User Type
@@ -203,12 +225,20 @@ const updateEmployee = async (employeeData) => {
     employee.password = await bcrypt.hash(password, 10);
   }
 
+  // Save employee
   await employee.save();
 
-  // Return updated employee without password
-  return await Employee.findById(_id)
+  console.log("SAVED TEAM AFTER UPDATE:", employee.team);
+
+  // Fetch saved employee without password
+  const updatedEmployee = await Employee.findById(_id)
     .select("-password")
-    .populate("team", "name");
+    .lean();
+
+  console.log("TEAM AFTER FETCHING:", updatedEmployee?.team);
+  console.log("UPDATED EMPLOYEE:", updatedEmployee);
+
+  return updatedEmployee;
 };
 
 // DELETE EMPLOYEE
