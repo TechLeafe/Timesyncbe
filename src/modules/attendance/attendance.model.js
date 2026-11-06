@@ -109,6 +109,38 @@ const attendanceSchema = new mongoose.Schema(
       default: "Pending",
     },
 
+    attendanceStatusManuallyCorrected: {
+      type: Boolean,
+      default: false,
+    },
+
+    attendanceCorrections: [
+      {
+        hrUserId: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        previousStatus: {
+          type: String,
+          required: true,
+        },
+        newStatus: {
+          type: String,
+          required: true,
+        },
+        reason: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        modifiedAt: {
+          type: Date,
+          required: true,
+        },
+      },
+    ],
+
     finalizedAt: {
       type: Date,
       default: null,

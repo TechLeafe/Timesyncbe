@@ -319,6 +319,46 @@ const reviewAttendance = async (req, res, next) => {
   }
 };
 
+const correctAttendanceStatus = async (req, res, next) => {
+  if (!requireReviewer(req, res)) return;
+
+  try {
+    const { user_id, date, attendanceStatus, reason } = req.body;
+    if (
+      typeof user_id !== "string" ||
+      !user_id.trim() ||
+      typeof date !== "string" ||
+      !date.trim() ||
+      typeof attendanceStatus !== "string" ||
+      typeof reason !== "string" ||
+      !reason.trim() ||
+      reason.trim().length > 1000
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Employee ID, date, attendance status, and a correction reason of 1 to 1000 characters are required",
+      });
+    }
+
+    const attendance = await attendanceService.correctAttendanceStatus(
+      user_id,
+      date,
+      attendanceStatus,
+      reason,
+      req.user.user_id
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Attendance status corrected successfully",
+      data: attendance,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   checkIn,
   checkOut,
@@ -328,4 +368,5 @@ module.exports = {
   getEmployeeAttendance,
   getAttendanceApprovals,
   reviewAttendance,
+  correctAttendanceStatus,
 };

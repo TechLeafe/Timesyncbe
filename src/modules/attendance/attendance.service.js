@@ -503,25 +503,42 @@ const finalizeAttendanceForDay = async (
         )
       : "Absent";
 
-    attendance.attendanceStatus = attendanceStatus;
-    attendance.requestedPermissionHours =
-      permissionCredit.requestedPermissionHours;
-    attendance.approvedPermissionRequestedHours =
-      permissionCredit.approvedPermissionRequestedHours;
-    attendance.approvedPermissionHours =
-      permissionCredit.approvedPermissionHours;
-    attendance.totalCreditedWorkingSeconds =
-      (Number(attendance.totalWorkingSeconds) || 0) +
-      permissionCredit.approvedPermissionHours * 3600;
-    attendance.permissionStatus = permissionCredit.permissionStatus;
-    attendance.monthlyPermissionUsedHours = monthlyPermissionUsedHours;
-    attendance.monthlyPermissionRemainingHours = Math.max(
-      0,
-      MONTHLY_PERMISSION_LIMIT_HOURS - monthlyPermissionUsedHours
+    const finalizedAt = new Date();
+    const update = {
+      totalWorkingSeconds: attendance.totalWorkingSeconds,
+      requestedPermissionHours:
+        permissionCredit.requestedPermissionHours,
+      approvedPermissionRequestedHours:
+        permissionCredit.approvedPermissionRequestedHours,
+      approvedPermissionHours:
+        permissionCredit.approvedPermissionHours,
+      totalCreditedWorkingSeconds:
+        (Number(attendance.totalWorkingSeconds) || 0) +
+        permissionCredit.approvedPermissionHours * 3600,
+      permissionStatus: permissionCredit.permissionStatus,
+      monthlyPermissionUsedHours,
+      monthlyPermissionRemainingHours: Math.max(
+        0,
+        MONTHLY_PERMISSION_LIMIT_HOURS - monthlyPermissionUsedHours
+      ),
+      finalizedAt,
+      approvalStatus: "Pending",
+    };
+
+    await Attendance.updateOne(
+      { _id: attendance._id },
+      { $set: update }
     );
-    attendance.finalizedAt = new Date();
-    attendance.approvalStatus = "Pending";
-    await attendance.save();
+
+    if (!attendance.attendanceStatusManuallyCorrected) {
+      await Attendance.updateOne(
+        {
+          _id: attendance._id,
+          attendanceStatusManuallyCorrected: { $ne: true },
+        },
+        { $set: { attendanceStatus } }
+      );
+    }
   }
 
   return day;
@@ -909,7 +926,8 @@ const formatAttendance = (attendance) => {
   if (
     data.day === getToday() &&
     !data.finalizedAt &&
-    !data.checkOutTime
+    !data.checkOutTime &&
+    !data.attendanceStatusManuallyCorrected
   ) {
     data.attendanceStatus = "In Progress";
   }
@@ -1200,6 +1218,89 @@ const getEmployeeAttendance = async (
   );
 };
 
+const correctAttendanceStatus = async (
+  user_id,
+  day,
+  newStatus,
+  reason,
+  hrUserId
+) => {
+  const cleanUserId = typeof user_id === "string" ? user_id.trim() : "";
+  const cleanDay = typeof day === "string" ? day.trim() : "";
+  const cleanReason = typeof reason === "string" ? reason.trim() : "";
+
+  if (!cleanUserId || !cleanDay || !hrUserId) {
+    const error = new Error("Employee ID, date, and HR user ID are required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!isValidDate(cleanDay)) {
+    const error = new Error("Invalid date. Use YYYY-MM-DD format");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (newStatus !== "Present") {
+    const error = new Error("Attendance can only be corrected to Present");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!cleanReason || cleanReason.length > 1000) {
+    const error = new Error(
+      "A correction reason of 1 to 1000 characters is required"
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const modifiedAt = new Date();
+  const attendance = await Attendance.findOneAndUpdate(
+    {
+      user_id: cleanUserId,
+      day: cleanDay,
+      attendanceStatus: "Absent",
+      attendanceStatusManuallyCorrected: { $ne: true },
+    },
+    {
+      $set: {
+        attendanceStatus: newStatus,
+        attendanceStatusManuallyCorrected: true,
+      },
+      $push: {
+        attendanceCorrections: {
+          hrUserId,
+          previousStatus: "Absent",
+          newStatus,
+          reason: cleanReason,
+          modifiedAt,
+        },
+      },
+    },
+    { new: true, runValidators: true }
+  );
+
+  if (attendance) return attendance;
+
+  const existingAttendance = await Attendance.findOne({
+    user_id: cleanUserId,
+    day: cleanDay,
+  }).select("attendanceStatus");
+
+  if (!existingAttendance) {
+    const error = new Error("Attendance record was not found for this employee and date");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const error = new Error(
+    `Attendance status is ${existingAttendance.attendanceStatus}; only Absent records can be corrected`
+  );
+  error.statusCode = 409;
+  throw error;
+};
+
 module.exports = {
   checkIn,
   checkOut,
@@ -1208,6 +1309,7 @@ module.exports = {
   getEmployeeAttendance,
   getAttendanceApprovals,
   reviewAttendance,
+  correctAttendanceStatus,
   refreshAttendanceStatus,
   finalizeAttendanceForDay,
   getSuggestedAttendanceStatus,
