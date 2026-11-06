@@ -323,12 +323,19 @@ const correctAttendanceStatus = async (req, res, next) => {
   if (!requireReviewer(req, res)) return;
 
   try {
-    const { user_id, date, attendanceStatus, reason } = req.body;
+    const {
+      user_id,
+      date,
+      currentStatus,
+      attendanceStatus,
+      reason,
+    } = req.body;
     if (
       typeof user_id !== "string" ||
       !user_id.trim() ||
       typeof date !== "string" ||
       !date.trim() ||
+      typeof currentStatus !== "string" ||
       typeof attendanceStatus !== "string" ||
       typeof reason !== "string" ||
       !reason.trim() ||
@@ -344,6 +351,7 @@ const correctAttendanceStatus = async (req, res, next) => {
     const attendance = await attendanceService.correctAttendanceStatus(
       user_id,
       date,
+      currentStatus,
       attendanceStatus,
       reason,
       req.user.user_id
@@ -351,7 +359,7 @@ const correctAttendanceStatus = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "Attendance status corrected successfully",
+      message: "Attendance updated successfully",
       data: attendance,
     });
   } catch (error) {

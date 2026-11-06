@@ -619,29 +619,45 @@ const refreshAttendanceStatus = async (user_id, day) => {
   );
   const monthlyPermissionUsedHours =
     await getMonthlyPermissionUsedHours(user_id, day);
-  attendance.attendanceStatus = getSuggestedAttendanceStatus(
-    attendance,
-    asOf,
-    permissionCredit.approvedPermissionHours,
-    permissionCredit.lateArrivalUncoveredMinutes
+  const update = {
+    requestedPermissionHours:
+      permissionCredit.requestedPermissionHours,
+    approvedPermissionRequestedHours:
+      permissionCredit.approvedPermissionRequestedHours,
+    approvedPermissionHours:
+      permissionCredit.approvedPermissionHours,
+    totalCreditedWorkingSeconds:
+      getTotalWorkingSeconds(attendance, asOf) +
+      permissionCredit.approvedPermissionHours * 3600,
+    permissionStatus: permissionCredit.permissionStatus,
+    monthlyPermissionUsedHours,
+    monthlyPermissionRemainingHours: Math.max(
+      0,
+      MONTHLY_PERMISSION_LIMIT_HOURS - monthlyPermissionUsedHours
+    ),
+  };
+  await Attendance.updateOne(
+    { _id: attendance._id },
+    { $set: update }
   );
-  attendance.requestedPermissionHours =
-    permissionCredit.requestedPermissionHours;
-  attendance.approvedPermissionRequestedHours =
-    permissionCredit.approvedPermissionRequestedHours;
-  attendance.approvedPermissionHours =
-    permissionCredit.approvedPermissionHours;
-  attendance.totalCreditedWorkingSeconds =
-    getTotalWorkingSeconds(attendance, asOf) +
-    permissionCredit.approvedPermissionHours * 3600;
-  attendance.permissionStatus = permissionCredit.permissionStatus;
-  attendance.monthlyPermissionUsedHours = monthlyPermissionUsedHours;
-  attendance.monthlyPermissionRemainingHours = Math.max(
-    0,
-    MONTHLY_PERMISSION_LIMIT_HOURS - monthlyPermissionUsedHours
-  );
-  await attendance.save();
-  return attendance;
+
+  if (!attendance.attendanceStatusManuallyCorrected) {
+    const attendanceStatus = getSuggestedAttendanceStatus(
+      attendance,
+      asOf,
+      permissionCredit.approvedPermissionHours,
+      permissionCredit.lateArrivalUncoveredMinutes
+    );
+    await Attendance.updateOne(
+      {
+        _id: attendance._id,
+        attendanceStatusManuallyCorrected: { $ne: true },
+      },
+      { $set: { attendanceStatus } }
+    );
+  }
+
+  return Attendance.findById(attendance._id);
 };
 
 // CHECK IN
@@ -1221,6 +1237,7 @@ const getEmployeeAttendance = async (
 const correctAttendanceStatus = async (
   user_id,
   day,
+  currentStatus,
   newStatus,
   reason,
   hrUserId
@@ -1241,8 +1258,21 @@ const correctAttendanceStatus = async (
     throw error;
   }
 
-  if (newStatus !== "Present") {
-    const error = new Error("Attendance can only be corrected to Present");
+  const allowedCorrections = {
+    Absent: ["Present"],
+    Present: ["Absent"],
+    "Half-Day Present": ["Present"],
+  };
+  if (
+    !Object.prototype.hasOwnProperty.call(
+      allowedCorrections,
+      currentStatus
+    ) ||
+    !allowedCorrections[currentStatus].includes(newStatus)
+  ) {
+    const error = new Error(
+      "Attendance can only be changed from Absent to Present, Present to Absent, or Half-Day Present to Present"
+    );
     error.statusCode = 400;
     throw error;
   }
@@ -1260,8 +1290,7 @@ const correctAttendanceStatus = async (
     {
       user_id: cleanUserId,
       day: cleanDay,
-      attendanceStatus: "Absent",
-      attendanceStatusManuallyCorrected: { $ne: true },
+      attendanceStatus: currentStatus,
     },
     {
       $set: {
@@ -1271,7 +1300,7 @@ const correctAttendanceStatus = async (
       $push: {
         attendanceCorrections: {
           hrUserId,
-          previousStatus: "Absent",
+          previousStatus: currentStatus,
           newStatus,
           reason: cleanReason,
           modifiedAt,
@@ -1295,7 +1324,7 @@ const correctAttendanceStatus = async (
   }
 
   const error = new Error(
-    `Attendance status is ${existingAttendance.attendanceStatus}; only Absent records can be corrected`
+    `Attendance status is ${existingAttendance.attendanceStatus}; expected ${currentStatus}`
   );
   error.statusCode = 409;
   throw error;
