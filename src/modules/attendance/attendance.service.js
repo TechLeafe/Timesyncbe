@@ -1157,6 +1157,139 @@ const getAttendanceHistory = async (
   return formatAttendanceWithPermissions(attendance);
 };
 
+const getAttendanceExportRows = async (startDate, endDate, leaveType = "ALL") => {
+  const rangeStart = new Date(`${startDate}T00:00:00.000Z`);
+  const rangeEnd = new Date(`${endDate}T23:59:59.999Z`);
+  const leaveTypeAliases = {
+    CL: ["CL", "Casual Leave"],
+    SL: ["SL", "Sick Leave"],
+    COMP_OFF: ["COMP_OFF"],
+    PERMISSION: ["PERMISSION", "Permission"],
+  };
+  const selectedTypes =
+    leaveType === "ALL"
+      ? Object.values(leaveTypeAliases).flat()
+      : leaveTypeAliases[leaveType];
+  const [attendance, approvedLeaves] = await Promise.all([
+    Attendance.find({
+      day: { $gte: startDate, $lte: endDate },
+    })
+      .sort({ day: 1, employeeId: 1 })
+      .lean(),
+    LeaveApply.find({
+      status: "Approved",
+      leaveType: { $in: selectedTypes },
+      fromDate: { $lte: rangeEnd },
+      $or: [{ toDate: null }, { toDate: { $gte: rangeStart } }],
+    })
+      .select("user_id leaveType fromDate toDate totalHours")
+      .lean(),
+  ]);
+  const userIds = [
+    ...new Set([
+      ...attendance.map((record) => record.user_id),
+      ...approvedLeaves.map((leave) => leave.user_id),
+    ]),
+  ];
+  const employees = await Employee.find({ user_id: { $in: userIds } })
+    .select("user_id name employeeId")
+    .lean();
+  const employeeByUser = new Map(
+    employees.map((employee) => [employee.user_id, employee])
+  );
+
+  const rowsByUserAndDay = new Map();
+  const attendanceByUserAndDay = new Map(
+    attendance.map((record) => [`${record.user_id}:${record.day}`, record])
+  );
+  if (leaveType === "ALL") {
+    for (const record of attendance) {
+      rowsByUserAndDay.set(`${record.user_id}:${record.day}`, {
+        userId: record.user_id,
+        employeeId: record.employeeId,
+        date: record.day,
+        attendanceStatus: record.attendanceStatus || "",
+        leaveType: "",
+        permissionHours: 0,
+      });
+    }
+  }
+
+  for (const leave of approvedLeaves) {
+    if (!leave.fromDate || !leave.user_id) continue;
+
+    const leaveStart = new Date(leave.fromDate).toISOString().slice(0, 10);
+    const leaveEnd = leave.toDate
+      ? new Date(leave.toDate).toISOString().slice(0, 10)
+      : leaveStart;
+    const firstDay = leaveStart < startDate ? startDate : leaveStart;
+    const lastDay = leaveEnd > endDate ? endDate : leaveEnd;
+    if (firstDay > lastDay) continue;
+
+    const rawLeaveType = String(leave.leaveType || "").toUpperCase();
+    const normalizedLeaveType =
+      rawLeaveType === "CL" || rawLeaveType === "CASUAL LEAVE"
+        ? "Casual Leave"
+        : rawLeaveType === "SL" || rawLeaveType === "SICK LEAVE"
+          ? "Sick Leave"
+          : rawLeaveType === "COMP_OFF"
+            ? "Compensatory Off"
+            : rawLeaveType === "PERMISSION"
+              ? "Permission"
+              : "";
+    if (!normalizedLeaveType) continue;
+
+    const cursor = new Date(`${firstDay}T00:00:00.000Z`);
+    const lastDate = new Date(`${lastDay}T00:00:00.000Z`);
+    while (cursor <= lastDate) {
+      const date = cursor.toISOString().slice(0, 10);
+      const key = `${leave.user_id}:${date}`;
+      const attendanceRecord = attendanceByUserAndDay.get(key);
+      const row = rowsByUserAndDay.get(key) || {
+        userId: leave.user_id,
+        employeeId: attendanceRecord?.employeeId || "",
+        date,
+        attendanceStatus:
+          attendanceRecord?.attendanceStatus ||
+          (normalizedLeaveType === "Permission" ? "Permission" : "On Leave"),
+        leaveType: "",
+        permissionHours: 0,
+      };
+
+      const leaveTypes = new Set(
+        row.leaveType ? row.leaveType.split(", ") : []
+      );
+      leaveTypes.add(normalizedLeaveType);
+      row.leaveType = [...leaveTypes].join(", ");
+      if (normalizedLeaveType === "Permission") {
+        row.permissionHours += Number(leave.totalHours) || 0;
+      }
+
+      rowsByUserAndDay.set(key, row);
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+  }
+
+  return [...rowsByUserAndDay.values()]
+    .map((row) => {
+      const employee = employeeByUser.get(row.userId);
+      return {
+        employeeId: row.employeeId || employee?.employeeId || "",
+        employeeName: employee?.name || "",
+        date: row.date,
+        attendanceStatus: row.attendanceStatus,
+        leaveType: row.leaveType,
+        permissionDuration:
+          row.permissionHours > 0 ? `${row.permissionHours} hours` : "",
+      };
+    })
+    .sort(
+      (left, right) =>
+        left.date.localeCompare(right.date) ||
+        left.employeeId.localeCompare(right.employeeId)
+    );
+};
+
 const getAttendanceApprovals = async () => {
   return Attendance.find({
     approvalStatus: "Pending",
@@ -1335,6 +1468,7 @@ module.exports = {
   checkOut,
   getDailyAttendance,
   getAttendanceHistory,
+  getAttendanceExportRows,
   getEmployeeAttendance,
   getAttendanceApprovals,
   reviewAttendance,

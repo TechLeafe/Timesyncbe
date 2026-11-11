@@ -12,12 +12,30 @@ const {
   getAttendanceApprovals,
   reviewAttendance,
   correctAttendanceStatus,
+  exportAttendance,
 } = require("./attendance.controller");
 
 const router = express.Router();
 
 // JWT authentication
 router.use(authMiddleware);
+
+const authorizeAdminHR = (req, res, next) => {
+  if ([1, 2].includes(Number(req.user.userType))) {
+    return next();
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: "Only Admin and HR can export attendance",
+  });
+};
+
+router.get(
+  "/export",
+  authorizeAdminHR,
+  exportAttendance
+);
 
 // Check-in
 router.post("/check-in", checkIn);

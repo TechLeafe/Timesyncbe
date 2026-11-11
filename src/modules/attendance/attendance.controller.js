@@ -1,6 +1,9 @@
 const attendanceService = require("./attendance.service");
 const attendanceCronStatus = require("./attendanceCronStatus");
 const attendanceScheduler = require("./attendanceScheduler");
+const {
+  generateAttendanceExcel,
+} = require("./attendanceExport.service");
 
 const {
   validateAttendancePayload,
@@ -367,6 +370,59 @@ const correctAttendanceStatus = async (req, res, next) => {
   }
 };
 
+const exportAttendance = async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const isValidDate = (value) =>
+      typeof value === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+      Number.isFinite(new Date(`${value}T00:00:00.000Z`).getTime()) &&
+      new Date(`${value}T00:00:00.000Z`).toISOString().startsWith(value);
+
+    if (!isValidDate(startDate) || !isValidDate(endDate)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid startDate and endDate are required in YYYY-MM-DD format",
+      });
+    }
+
+    const leaveType = req.query.leaveType || "ALL";
+    if (!["ALL", "CL", "SL", "COMP_OFF", "PERMISSION"].includes(leaveType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid leaveType filter",
+      });
+    }
+
+    if (startDate > endDate) {
+      return res.status(400).json({
+        success: false,
+        message: "startDate must be on or before endDate",
+      });
+    }
+
+    const rows = await attendanceService.getAttendanceExportRows(
+      startDate,
+      endDate,
+      leaveType
+    );
+    const workbook = await generateAttendanceExcel(rows, leaveType);
+
+    res
+      .status(200)
+      .type(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      )
+      .set(
+        "Content-Disposition",
+        `attachment; filename="Employee_Attendance_${startDate}_to_${endDate}.xlsx"`
+      )
+      .send(Buffer.from(workbook));
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   checkIn,
   checkOut,
@@ -377,4 +433,5 @@ module.exports = {
   getAttendanceApprovals,
   reviewAttendance,
   correctAttendanceStatus,
+  exportAttendance,
 };
