@@ -53,12 +53,6 @@ app.use("/api/attendance", attendanceRoutes);
 app.use("/api/holidays", holidayRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/daily-tasks", dailyTaskRouter);
-app.use("/api/birthday-creation", birthdayCreationRoutes);
-
-// Birthday Creation routes
-app.use("/api/birthday-creation", birthdayCreationRoutes);
-
-console.log("Birthday Creation routes registered");
 
 app.use(
   "/api/monthly-achievement",
