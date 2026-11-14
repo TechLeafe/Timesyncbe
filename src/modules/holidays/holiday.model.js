@@ -17,7 +17,7 @@ const holidaySchema = new mongoose.Schema(
     holidayType: {
       type: String,
       required: true,
-      enum: ["Public", "Company"],
+      enum: ["Public", "Company", "Working Day"],
       trim: true,
     },
 

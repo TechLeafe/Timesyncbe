@@ -1,4 +1,9 @@
 const attendanceService = require("./attendance.service");
+const attendanceCronStatus = require("./attendanceCronStatus");
+const attendanceScheduler = require("./attendanceScheduler");
+const {
+  generateAttendanceExcel,
+} = require("./attendanceExport.service");
 
 const {
   validateAttendancePayload,
@@ -76,6 +81,28 @@ const checkOut = async (req, res, next) => {
   }
 };
 
+// ATTENDANCE CRON STATUS (Admin / HR only)
+const getAttendanceCronStatus = async (req, res) => {
+  const userType = Number(req.user.userType);
+
+  if (userType !== 1 && userType !== 2) {
+    return res.status(403).json({
+      success: false,
+      message: "Only Admin and HR can view attendance cron status",
+    });
+  }
+
+  await attendanceScheduler.ensureDueFinalization();
+  const data = attendanceCronStatus.getStatus();
+  return res.status(200).json({
+    success: true,
+    message: data.scheduled
+      ? "Attendance cron is scheduled"
+      : "Attendance cron is not scheduled",
+    data,
+  });
+};
+
 // DAILY ATTENDANCE
 const getDailyAttendance = async (
   req,
@@ -135,6 +162,12 @@ const getAttendanceHistory = async (
         message: "Validation failed",
         errors: validation.errors,
       });
+    }
+
+    const finalization =
+      await attendanceScheduler.ensureDueFinalization();
+    if (finalization.error) {
+      return next(finalization.error);
     }
 
     const user_id =
@@ -289,12 +322,116 @@ const reviewAttendance = async (req, res, next) => {
   }
 };
 
+const correctAttendanceStatus = async (req, res, next) => {
+  if (!requireReviewer(req, res)) return;
+
+  try {
+    const {
+      user_id,
+      date,
+      currentStatus,
+      attendanceStatus,
+      reason,
+    } = req.body;
+    if (
+      typeof user_id !== "string" ||
+      !user_id.trim() ||
+      typeof date !== "string" ||
+      !date.trim() ||
+      typeof currentStatus !== "string" ||
+      typeof attendanceStatus !== "string" ||
+      typeof reason !== "string" ||
+      !reason.trim() ||
+      reason.trim().length > 1000
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Employee ID, date, attendance status, and a correction reason of 1 to 1000 characters are required",
+      });
+    }
+
+    const attendance = await attendanceService.correctAttendanceStatus(
+      user_id,
+      date,
+      currentStatus,
+      attendanceStatus,
+      reason,
+      req.user.user_id
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Attendance updated successfully",
+      data: attendance,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const exportAttendance = async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const isValidDate = (value) =>
+      typeof value === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+      Number.isFinite(new Date(`${value}T00:00:00.000Z`).getTime()) &&
+      new Date(`${value}T00:00:00.000Z`).toISOString().startsWith(value);
+
+    if (!isValidDate(startDate) || !isValidDate(endDate)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid startDate and endDate are required in YYYY-MM-DD format",
+      });
+    }
+
+    const leaveType = req.query.leaveType || "ALL";
+    if (!["ALL", "CL", "SL", "COMP_OFF", "PERMISSION"].includes(leaveType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid leaveType filter",
+      });
+    }
+
+    if (startDate > endDate) {
+      return res.status(400).json({
+        success: false,
+        message: "startDate must be on or before endDate",
+      });
+    }
+
+    const rows = await attendanceService.getAttendanceExportRows(
+      startDate,
+      endDate,
+      leaveType
+    );
+    const workbook = await generateAttendanceExcel(rows, leaveType);
+
+    res
+      .status(200)
+      .type(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      )
+      .set(
+        "Content-Disposition",
+        `attachment; filename="Employee_Attendance_${startDate}_to_${endDate}.xlsx"`
+      )
+      .send(Buffer.from(workbook));
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   checkIn,
   checkOut,
+  getAttendanceCronStatus,
   getDailyAttendance,
   getAttendanceHistory,
   getEmployeeAttendance,
   getAttendanceApprovals,
   reviewAttendance,
+  correctAttendanceStatus,
+  exportAttendance,
 };

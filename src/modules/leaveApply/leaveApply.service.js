@@ -1,6 +1,8 @@
 const LeaveApply = require("./leaveApply.model");
 const Leave = require("../leaves/leave.model");
 const Employee = require("../employees/employee.model");
+const PermissionUsage = require("./permissionUsage.model");
+const attendanceService = require("../attendance/attendance.service");
 
 const POLICY_LIMIT_KEY_MAP = {
   CL: "casualLeave",
@@ -8,6 +10,7 @@ const POLICY_LIMIT_KEY_MAP = {
   COMP_OFF: "compensatoryOff",
   PERMISSION: "permissionsPerMonth",
 };
+const MONTHLY_PERMISSION_LIMIT_HOURS = 4;
 
 const calculateDays = (fromDate, toDate) => {
   const start = new Date(fromDate);
@@ -20,6 +23,115 @@ const calculateHours = (fromTime, toTime) => {
   const [fromHour, fromMinute] = fromTime.split(":").map(Number);
   const [toHour, toMinute] = toTime.split(":").map(Number);
   return (toHour * 60 + toMinute - (fromHour * 60 + fromMinute)) / 60;
+};
+
+const getPermissionDurationMinutes = (fromTime, toTime) => {
+  const [fromHour, fromMinute] = fromTime.split(":").map(Number);
+  const [toHour, toMinute] = toTime.split(":").map(Number);
+  return toHour * 60 + toMinute - (fromHour * 60 + fromMinute);
+};
+
+const getPermissionMonthBounds = (date) => {
+  const dateKey =
+    typeof date === "string" && /^\d{4}-\d{2}-\d{2}/.test(date)
+      ? date.slice(0, 10)
+      : new Date(date).toISOString().slice(0, 10);
+  const [year, month] = dateKey.split("-").map(Number);
+  return {
+    start: new Date(Date.UTC(year, month - 1, 1)),
+    end: new Date(Date.UTC(year, month, 1)),
+  };
+};
+
+const getApprovedPermissionHours = async (user_id, date) => {
+  const { start, end } = getPermissionMonthBounds(date);
+  const query = {
+    user_id,
+    leaveType: { $in: ["PERMISSION", "Permission"] },
+    status: "Approved",
+    fromDate: { $gte: start, $lt: end },
+  };
+  const approvedPermissions = await LeaveApply.find(query)
+    .select("totalHours")
+    .lean();
+  return approvedPermissions.reduce(
+    (total, permission) => total + (Number(permission.totalHours) || 0),
+    0
+  );
+};
+
+const getPermissionMonthKey = (date) => {
+  const { start } = getPermissionMonthBounds(date);
+  return start.toISOString().slice(0, 7);
+};
+
+const getPermissionUsageLedger = async (user_id, date) => {
+  const month = getPermissionMonthKey(date);
+  let ledger = await PermissionUsage.findOne({ user_id, month });
+  if (ledger) return ledger;
+
+  const usedHours = await getApprovedPermissionHours(user_id, date);
+  try {
+    ledger = await PermissionUsage.create({ user_id, month, usedHours });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    ledger = await PermissionUsage.findOne({ user_id, month });
+    if (!ledger) throw error;
+  }
+  return ledger;
+};
+
+const changePermissionUsage = async (user_id, date, hours) => {
+  const month = getPermissionMonthKey(date);
+  const updated = await PermissionUsage.findOneAndUpdate(
+    { user_id, month, usedHours: { $lte: MONTHLY_PERMISSION_LIMIT_HOURS - hours } },
+    { $inc: { usedHours: hours } },
+    { new: true }
+  );
+  return updated;
+};
+
+const releasePermissionUsage = async (user_id, date, hours) => {
+  const month = getPermissionMonthKey(date);
+  const updated = await PermissionUsage.findOneAndUpdate(
+    { user_id, month, usedHours: { $gte: hours } },
+    { $inc: { usedHours: -hours } },
+    { new: true }
+  );
+  if (!updated) {
+    throw new Error(
+      `Permission usage ledger is inconsistent for ${user_id} in ${month}`
+    );
+  }
+};
+
+const getPermissionDurationError = (fromTime, toTime) => {
+  if (
+    typeof fromTime !== "string" ||
+    typeof toTime !== "string" ||
+    !/^\d{2}:\d{2}$/.test(fromTime) ||
+    !/^\d{2}:\d{2}$/.test(toTime)
+  ) {
+    return "Permission start and end times must be valid HH:mm values.";
+  }
+  const minutes = getPermissionDurationMinutes(fromTime, toTime);
+  const [fromHour, fromMinute] = fromTime.split(":").map(Number);
+  const [toHour, toMinute] = toTime.split(":").map(Number);
+  if (
+    [fromHour, fromMinute, toHour, toMinute].some(
+      (value) => !Number.isInteger(value)
+    ) ||
+    fromHour > 23 ||
+    toHour > 23 ||
+    fromMinute > 59 ||
+    toMinute > 59
+  ) {
+    return "Permission start and end times must be valid HH:mm values.";
+  }
+  if (![30, 60, 90, 120].includes(minutes)) {
+    return "Permission duration must be 30 minutes, 1 hour, 1.5 hours, or 2 hours.";
+  }
+  return null;
 };
 
 // Helper: Calculate default business year if omitted in request
@@ -57,7 +169,7 @@ const applyLeave = async (user_id, leaveData) => {
       : getBusinessYear(fromDate);
 
   const leavePolicy = await Leave.findOne({ businessYear });
-  if (!leavePolicy) {
+  if (!leavePolicy && leaveType !== "PERMISSION") {
     const error = new Error(
       `Leave policy not found for business year ${businessYear}`
     );
@@ -94,34 +206,32 @@ const applyLeave = async (user_id, leaveData) => {
   }
 
   if (leaveType === "PERMISSION") {
-    totalHours = calculateHours(fromTime, toTime);
-    const startOfMonth = new Date(fromDate);
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
-    const endOfMonth = new Date(fromDate);
-    endOfMonth.setMonth(endOfMonth.getMonth() + 1);
-    endOfMonth.setDate(0);
-    endOfMonth.setHours(23, 59, 59, 999);
-
-    const approvedPermissions = await LeaveApply.find({
-      user_id,
-      leaveType: "PERMISSION",
-      status: "Approved",
-      fromDate: { $gte: startOfMonth,$lte: endOfMonth },
-    });
-
-    const allowedPermissions = leavePolicy.permissionsPerMonth || 0;
-    if (approvedPermissions.length >= allowedPermissions) {
+    const durationError = getPermissionDurationError(fromTime, toTime);
+    if (durationError) {
       const error = new Error(
-        `Permission limit reached. Allowed: ${allowedPermissions} per month.`
+        durationError
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+    totalHours = calculateHours(fromTime, toTime);
+
+    const usedHours = (
+      await getPermissionUsageLedger(user_id, fromDate)
+    ).usedHours;
+    if (usedHours + totalHours > MONTHLY_PERMISSION_LIMIT_HOURS) {
+      const error = new Error(
+        `Permission balance exceeded. Only ${Math.max(
+          0,
+          MONTHLY_PERMISSION_LIMIT_HOURS - usedHours
+        )} hour(s) remain this month.`
       );
       error.statusCode = 400;
       throw error;
     }
   }
 
-  return await LeaveApply.create({
+  const leaveRequest = await LeaveApply.create({
     employeeId: employee._id,
     user_id,
     businessYear,
@@ -136,6 +246,18 @@ const applyLeave = async (user_id, leaveData) => {
     reason,
     status: "Pending",
   });
+
+  if (
+    String(leaveRequest.leaveType).toUpperCase() === "PERMISSION" &&
+    leaveRequest.fromDate
+  ) {
+    await attendanceService.refreshAttendanceStatus(
+      user_id,
+      leaveRequest.fromDate.toISOString().slice(0, 10)
+    );
+  }
+
+  return leaveRequest;
 };
 
 // 2. Get Leave List
@@ -207,10 +329,36 @@ const updateLeave = async (user_id, updateData) => {
   if (["CL", "SL", "COMP_OFF"].includes(targetLeaveType)) {
     totalDays = calculateDays(targetFromDate, targetToDate);
   } else if (targetLeaveType === "PERMISSION") {
+    const durationError = getPermissionDurationError(
+      fromTime || existingLeave.fromTime,
+      toTime || existingLeave.toTime
+    );
+    if (durationError) {
+      const error = new Error(durationError);
+      error.statusCode = 400;
+      throw error;
+    }
     totalHours = calculateHours(
       fromTime || existingLeave.fromTime,
       toTime || existingLeave.toTime
     );
+
+    const usedHours = (
+      await getPermissionUsageLedger(
+      user_id,
+      targetFromDate
+      )
+    ).usedHours;
+    if (usedHours + totalHours > MONTHLY_PERMISSION_LIMIT_HOURS) {
+      const error = new Error(
+        `Permission balance exceeded. Only ${Math.max(
+          0,
+          MONTHLY_PERMISSION_LIMIT_HOURS - usedHours
+        )} hour(s) remain this month.`
+      );
+      error.statusCode = 400;
+      throw error;
+    }
   }
 
   existingLeave.leaveType = targetLeaveType;
@@ -279,20 +427,22 @@ const reviewLeave = async (
     throw error;
   }
 
-  // Pre-check balance before final approval
-  if (status === "Approved") {
-    const leavePolicy = await Leave.findOne({
-      businessYear: leaveRequest.businessYear,
-    });
-    if (!leavePolicy) {
-      const error = new Error(
-        `Leave policy not found for business year ${leaveRequest.businessYear}`
-      );
-      error.statusCode = 400;
-      throw error;
-    }
+  const isPermission = ["PERMISSION", "Permission"].includes(
+    leaveRequest.leaveType
+  );
 
-    if (["CL", "SL", "COMP_OFF"].includes(leaveRequest.leaveType)) {
+  if (status === "Approved" && !isPermission) {
+      const leavePolicy = await Leave.findOne({
+        businessYear: leaveRequest.businessYear,
+      });
+      if (!leavePolicy) {
+        const error = new Error(
+          `Leave policy not found for business year ${leaveRequest.businessYear}`
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
       const approvedLeaves = await LeaveApply.find({
         user_id: leaveRequest.user_id,
         businessYear: leaveRequest.businessYear,
@@ -315,16 +465,110 @@ const reviewLeave = async (
         error.statusCode = 400;
         throw error;
       }
-    }
   }
 
-  leaveRequest.status = status;
-  leaveRequest.reviewedBy = reviewer._id;
-  leaveRequest.reviewedAt = new Date();
-  leaveRequest.rejectionReason =
-    status === "Rejected" ? rejectionReason.trim() : null;
+  let permissionReservation = 0;
+  let permissionHours = Number(leaveRequest.totalHours) || 0;
+  if (isPermission && status === "Approved") {
+    const durationError = getPermissionDurationError(
+      leaveRequest.fromTime,
+      leaveRequest.toTime
+    );
+    if (durationError) {
+      const error = new Error(`Cannot approve. ${durationError}`);
+      error.statusCode = 400;
+      throw error;
+    }
+    const requestedHours =
+      getPermissionDurationMinutes(
+        leaveRequest.fromTime,
+        leaveRequest.toTime
+      ) / 60;
+    if (Math.abs(permissionHours - requestedHours) > 0.001) {
+      const error = new Error(
+        "Cannot approve. Stored permission duration does not match the requested time range."
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+    permissionHours = requestedHours;
 
-  return await leaveRequest.save();
+    await getPermissionUsageLedger(
+      leaveRequest.user_id,
+      leaveRequest.fromDate
+    );
+    const reservation = await changePermissionUsage(
+      leaveRequest.user_id,
+      leaveRequest.fromDate,
+      permissionHours
+    );
+    if (!reservation) {
+      const error = new Error(
+        `Cannot approve. Monthly approved permission cannot exceed ${MONTHLY_PERMISSION_LIMIT_HOURS} hours.`
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+    permissionReservation = permissionHours;
+  } else if (isPermission && leaveRequest.status === "Approved") {
+    await getPermissionUsageLedger(
+      leaveRequest.user_id,
+      leaveRequest.fromDate
+    );
+  }
+
+  const updatedLeaveRequest = await LeaveApply.findOneAndUpdate(
+    { _id: leaveRequest._id, status: leaveRequest.status },
+    {
+      $set: {
+        status,
+        reviewedBy: reviewer._id,
+        reviewedAt: new Date(),
+        rejectionReason:
+          status === "Rejected" ? rejectionReason.trim() : null,
+      },
+    },
+    { new: true, runValidators: true }
+  );
+
+  if (!updatedLeaveRequest) {
+    if (permissionReservation > 0) {
+      await releasePermissionUsage(
+        leaveRequest.user_id,
+        leaveRequest.fromDate,
+        permissionReservation
+      );
+    }
+    const error = new Error(
+      "Leave application status changed while it was being reviewed. Refresh and try again."
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+
+  if (
+    isPermission &&
+    leaveRequest.status === "Approved" &&
+    status !== "Approved"
+  ) {
+    await releasePermissionUsage(
+      leaveRequest.user_id,
+      leaveRequest.fromDate,
+      permissionHours
+    );
+  }
+
+  if (
+    isPermission &&
+    leaveRequest.fromDate
+  ) {
+    await attendanceService.refreshAttendanceStatus(
+      leaveRequest.user_id,
+      leaveRequest.fromDate.toISOString().slice(0, 10)
+    );
+  }
+
+  return updatedLeaveRequest;
 };
 
 // 5. Get Leave Balance Summary for Dashboard
@@ -366,7 +610,7 @@ const getLeaveBalance = async (user_id, businessYearParam) => {
   };
 
   approvedLeaves.forEach((leave) => {
-    if (leave.leaveType === "PERMISSION") {
+    if (["PERMISSION", "Permission"].includes(leave.leaveType)) {
       used.PERMISSION_HOURS += leave.totalHours || 0;
     } else if (used[leave.leaveType] !== undefined) {
       used[leave.leaveType] += leave.totalDays || 0;
@@ -376,6 +620,16 @@ const getLeaveBalance = async (user_id, businessYearParam) => {
   const totalCL = leavePolicy.casualLeave || 0;
   const totalSL = leavePolicy.sickLeave || 0;
   const totalCompOff = leavePolicy.compensatoryOff || 0;
+  const indiaDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const currentMonthUsage = await getApprovedPermissionHours(
+    user_id,
+    indiaDate
+  );
 
   return {
     businessYear,
@@ -395,7 +649,12 @@ const getLeaveBalance = async (user_id, businessYearParam) => {
       remaining: Math.max(0, totalCompOff - used.COMP_OFF),
     },
     permissions: {
-      allowedPerMonth: leavePolicy.permissionsPerMonth || 0,
+      allowedPerMonth: MONTHLY_PERMISSION_LIMIT_HOURS,
+      usedHoursThisMonth: currentMonthUsage,
+      remainingHoursThisMonth: Math.max(
+        0,
+        MONTHLY_PERMISSION_LIMIT_HOURS - currentMonthUsage
+      ),
       usedHoursThisYear: used.PERMISSION_HOURS,
     },
   };

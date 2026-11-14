@@ -11,11 +11,23 @@ const dashboardRoutes = require("./modules/dashboard/dashboard.routes");
 const dailyTaskRouter = require("./modules/dailyTasks/dailyTask.router");
 const birthdayCreationRoutes = require("./modules/birthdayCreation/birthdayCreation.routes");
 
+const birthdayCreationRoutes = require(
+  "./modules/birthdayCreation/birthdayCreation.routes"
+);
+
+const monthlyAchievementRoutes = require(
+  "./modules/monthlyAchievement/monthlyAchievement.routes"
+);
+
 const errorMiddleware = require("./middleware/error.middleware");
 
 const app = express();
 
 app.use(cors());
+app.use(
+  "/api/monthly-achievement",
+  express.json({ limit: "15mb" })
+);
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -25,9 +37,17 @@ app.get("/", (req, res) => {
   });
 });
 
+// Employee routes
 app.use("/api/employees", employeeRoutes);
-app.use("/api/leaves", leaveRoutes);
+
+// Authentication routes
+app.use("/api/auth", authRoutes);
 app.use("/api", authRoutes);
+
+console.log("Auth routes registered: POST /api/login");
+
+// Existing HRMS routes
+app.use("/api/leaves", leaveRoutes);
 app.use("/api/leave-apply", leaveApplyRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/holidays", holidayRoutes);
@@ -35,7 +55,15 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/daily-tasks", dailyTaskRouter);
 app.use("/api/birthday-creation", birthdayCreationRoutes);
 
-// Error middleware should always be registered LAST
-app.use(errorMiddleware);
+// Birthday Creation routes
+app.use("/api/birthday-creation", birthdayCreationRoutes);
 
+console.log("Birthday Creation routes registered");
+
+app.use(
+  "/api/monthly-achievement",
+  monthlyAchievementRoutes
+);
+// Error middleware must be last
+app.use(errorMiddleware);
 module.exports = app;

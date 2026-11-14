@@ -3,8 +3,10 @@ const Employee = require("../employees/employee.model");
 const LeaveApply = require("../leaveApply/leaveApply.model");
 const Holiday = require("../holidays/holiday.model");
 
+const MONTHLY_PERMISSION_LIMIT_HOURS = 4;
+
 // Get today's date in India
-const getToday = () => {
+const getToday = (now = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
@@ -12,21 +14,24 @@ const getToday = () => {
     day: "2-digit",
   });
 
-  return formatter.format(new Date());
+  return formatter.format(now);
 };
 
-const getPreviousDay = () => {
-  const date = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const parts = new Intl.DateTimeFormat("en-CA", {
+const hasDailyFinalizationWindowOpened = (day, now = new Date()) => {
+  const today = getToday(now);
+  if (day > today) return false;
+  if (day < today) return true;
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const values = Object.fromEntries(
-    parts.map((part) => [part.type, part.value])
-  );
-  return `${values.year}-${values.month}-${values.day}`;
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const value = (type) =>
+    Number(parts.find((part) => part.type === type)?.value || 0);
+
+  return value("hour") >= 22;
 };
 
 const getDayBounds = (day) => ({
@@ -34,50 +39,334 @@ const getDayBounds = (day) => ({
   end: new Date(`${day}T23:59:59.999+05:30`),
 });
 
-const getSuggestedAttendanceStatus = (
-  attendance,
-  permissionHours,
-  dayEnd
-) => {
-  const firstCheckIn = attendance.checkInTime;
-  const firstCheckInParts = firstCheckIn
-    ? new Intl.DateTimeFormat("en-GB", {
-        timeZone: "Asia/Kolkata",
-        hour: "2-digit",
-        minute: "2-digit",
-        hourCycle: "h23",
-      }).formatToParts(firstCheckIn)
-    : [];
-  const firstCheckInHour = Number(
-    firstCheckInParts.find((part) => part.type === "hour")?.value
-  );
-  const firstCheckInMinute = Number(
-    firstCheckInParts.find((part) => part.type === "minute")?.value
-  );
+const getTotalWorkingSeconds = (attendance, asOf) => {
+  const dayBounds = getDayBounds(attendance.day);
+  const asOfTime = asOf.getTime();
+  const dayStart = dayBounds.start.getTime();
+  const dayEnd = Math.min(dayBounds.end.getTime(), asOfTime);
+  const sessions = attendance.sessions?.length
+    ? attendance.sessions
+    : attendance.checkInTime
+      ? [
+          {
+            checkInTime: attendance.checkInTime,
+            checkOutTime: attendance.checkOutTime,
+          },
+        ]
+      : [];
 
-  if (
-    firstCheckInHour > 11 ||
-    (firstCheckInHour === 11 && firstCheckInMinute > 0)
-  ) {
-    return "Present Late";
+  const intervals = sessions
+    .map((session) => {
+      const checkIn = new Date(session.checkInTime).getTime();
+      const checkOut = session.checkOutTime
+        ? new Date(session.checkOutTime).getTime()
+        : asOfTime;
+      const start = Math.max(checkIn, dayStart);
+      const end = Math.min(checkOut, asOfTime, dayEnd);
+
+      return { start, end };
+    })
+    .filter(
+      (interval) =>
+        Number.isFinite(interval.start) &&
+        Number.isFinite(interval.end) &&
+        interval.end > interval.start
+    )
+    .sort((left, right) => left.start - right.start);
+
+  let totalSeconds = 0;
+  let currentInterval = null;
+
+  for (const interval of intervals) {
+    if (!currentInterval) {
+      currentInterval = { ...interval };
+      continue;
+    }
+
+    if (interval.start <= currentInterval.end) {
+      currentInterval.end = Math.max(
+        currentInterval.end,
+        interval.end
+      );
+      continue;
+    }
+
+    totalSeconds += calculateWorkingSeconds(
+      currentInterval.start,
+      currentInterval.end
+    );
+    currentInterval = { ...interval };
   }
 
-  const sessions = attendance.sessions || [];
-  const totalSeconds = sessions.length
-    ? sessions.reduce((total, session) => {
-        const endTime = session.checkOutTime || dayEnd;
-        return total + calculateWorkingSeconds(session.checkInTime, endTime);
-      }, 0)
-    : attendance.checkOutTime
-      ? attendance.totalWorkingSeconds || 0
-      : calculateWorkingSeconds(attendance.checkInTime, dayEnd);
-  const creditedHours = totalSeconds / 3600 + permissionHours;
+  if (currentInterval) {
+    totalSeconds += calculateWorkingSeconds(
+      currentInterval.start,
+      currentInterval.end
+    );
+  }
 
-  return creditedHours >= 9 ? "Present" : "Present Late";
+  return totalSeconds;
 };
 
-const ensurePreviousDayAttendance = async () => {
-  const day = getPreviousDay();
+const getUtcDateBounds = (day) => {
+  const start = new Date(`${day}T00:00:00.000Z`);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start, end };
+};
+
+const getUtcMonthBounds = (day) => {
+  const [year, month] = day.split("-").map(Number);
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 1));
+  return { start, end };
+};
+
+const getMinutesInIndia = (date) => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const value = (type) =>
+    Number(parts.find((part) => part.type === type)?.value || 0);
+
+  return value("hour") * 60 + value("minute");
+};
+
+const mergeIntervals = (intervals) =>
+  intervals
+    .filter((interval) => interval.end > interval.start)
+    .sort((left, right) => left.start - right.start)
+    .reduce((merged, interval) => {
+      const last = merged[merged.length - 1];
+      if (!last || interval.start > last.end) {
+        merged.push({ ...interval });
+      } else {
+        last.end = Math.max(last.end, interval.end);
+      }
+      return merged;
+    }, []);
+
+const getUnworkedSeconds = (requestedIntervals, actualIntervals) => {
+  let eligibleSeconds = 0;
+  for (const requested of requestedIntervals) {
+    let remainingStart = requested.start;
+    for (const actual of actualIntervals) {
+      if (actual.end <= remainingStart) continue;
+      if (actual.start >= requested.end) break;
+      eligibleSeconds += Math.max(
+        0,
+        Math.floor(
+          (Math.min(actual.start, requested.end) - remainingStart) / 1000
+        )
+      );
+      remainingStart = Math.max(remainingStart, actual.end);
+      if (remainingStart >= requested.end) break;
+    }
+    if (remainingStart < requested.end) {
+      eligibleSeconds += Math.floor((requested.end - remainingStart) / 1000);
+    }
+  }
+  return eligibleSeconds;
+};
+
+const getPermissionInterval = (permission, day) => {
+  if (!permission.fromTime || !permission.toTime) return null;
+  const start = new Date(
+    `${day}T${permission.fromTime}:00+05:30`
+  ).getTime();
+  const end = new Date(
+    `${day}T${permission.toTime}:00+05:30`
+  ).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+  return { start, end };
+};
+
+const getPermissionCreditInfo = (
+  attendance,
+  permissions,
+  asOf = new Date()
+) => {
+  const approvedPermissions = permissions.filter(
+    (permission) => permission.status === "Approved"
+  );
+  const dayBounds = getDayBounds(attendance.day);
+  const shiftStart = new Date(
+    `${attendance.day}T09:00:00+05:30`
+  ).getTime();
+  const shiftEnd = new Date(
+    `${attendance.day}T18:00:00+05:30`
+  ).getTime();
+  const actualIntervals = mergeIntervals(
+    (attendance.sessions?.length
+      ? attendance.sessions
+      : attendance.checkInTime
+        ? [
+            {
+              checkInTime: attendance.checkInTime,
+              checkOutTime: attendance.checkOutTime,
+            },
+          ]
+        : []
+    )
+      .map((session) => ({
+        start: Math.max(
+          new Date(session.checkInTime).getTime(),
+          dayBounds.start.getTime(),
+          shiftStart
+        ),
+        end: Math.min(
+          session.checkOutTime
+            ? new Date(session.checkOutTime).getTime()
+            : asOf.getTime(),
+          dayBounds.end.getTime(),
+          shiftEnd,
+          asOf.getTime()
+        ),
+      }))
+  );
+  const requestedIntervals = mergeIntervals(
+    approvedPermissions
+      .map((permission) => getPermissionInterval(permission, attendance.day))
+      .filter(Boolean)
+      .map((interval) => ({
+        start: Math.max(interval.start, shiftStart),
+        end: Math.min(interval.end, shiftEnd, asOf.getTime()),
+      }))
+  );
+
+  const eligibleSeconds = getUnworkedSeconds(
+    requestedIntervals,
+    actualIntervals
+  );
+  const lateStart = new Date(
+    `${attendance.day}T11:00:00+05:30`
+  ).getTime();
+  const checkIn = attendance.checkInTime
+    ? new Date(attendance.checkInTime).getTime()
+    : lateStart;
+  const lateMinutes = Math.max(0, (checkIn - lateStart) / 60000);
+  const eligibleLateSeconds = getUnworkedSeconds(
+    requestedIntervals
+      .map((interval) => ({
+        start: Math.max(interval.start, lateStart),
+        end: Math.min(interval.end, checkIn),
+      }))
+      .filter((interval) => interval.end > interval.start),
+    actualIntervals
+  );
+
+  const requestedPermissionHours = permissions.reduce(
+    (total, permission) =>
+      total + (Number(permission.totalHours) || 0),
+    0
+  );
+  const approvedPermissionRequestedHours = approvedPermissions.reduce(
+    (total, permission) =>
+      total + (Number(permission.totalHours) || 0),
+    0
+  );
+  const approvedPermissionHours = eligibleSeconds / 3600;
+  const statuses = [...new Set(permissions.map(({ status }) => status))];
+
+  return {
+    requestedPermissionHours,
+    approvedPermissionRequestedHours,
+    approvedPermissionHours,
+    lateArrivalUncoveredMinutes: Math.max(
+      0,
+      lateMinutes - eligibleLateSeconds / 60
+    ),
+    permissionStatus:
+      statuses.length > 1
+        ? "Mixed"
+        : statuses[0] || null,
+    permissionStatuses: statuses,
+    permissionRequests: permissions.map((permission) => ({
+      totalHours: Number(permission.totalHours) || 0,
+      fromTime: permission.fromTime,
+      toTime: permission.toTime,
+      status: permission.status,
+    })),
+  };
+};
+
+const getSuggestedAttendanceStatus = (
+  attendance,
+  asOf,
+  approvedPermissionHours = 0,
+  lateArrivalUncoveredMinutes
+) => {
+  if (!attendance.checkInTime) {
+    return "Absent";
+  }
+
+  const lateMinutes = Math.max(
+    0,
+    getMinutesInIndia(new Date(attendance.checkInTime)) -
+      11 * 60
+  );
+  const uncoveredLateMinutes =
+    lateArrivalUncoveredMinutes === undefined
+      ? Math.max(
+          0,
+          lateMinutes -
+            Math.max(0, Number(approvedPermissionHours) || 0) * 60
+        )
+      : Math.max(0, Number(lateArrivalUncoveredMinutes) || 0);
+
+  if (!attendance.checkOutTime) {
+    return lateMinutes > 0 && uncoveredLateMinutes > 0
+      ? "Late Present"
+      : "Absent";
+  }
+
+  // Calculate actual working hours
+  const workingSeconds = getTotalWorkingSeconds(
+    attendance,
+    asOf
+  );
+
+  // Only approved permission is passed to this function
+  const permissionSeconds =
+    Math.max(0, Number(approvedPermissionHours) || 0) * 3600;
+
+  const effectiveSeconds =
+    workingSeconds + permissionSeconds;
+
+  // Early departure before 4:30 PM
+  if (effectiveSeconds >= 9 * 3600) {
+    if (lateMinutes > 0 && uncoveredLateMinutes > 0) {
+      return "Late Present";
+    }
+
+    return "Present";
+  }
+
+  if (lateMinutes > 0 && uncoveredLateMinutes > 0) {
+    return "Late Present";
+  }
+
+  if (effectiveSeconds >= 6 * 3600 && attendance.checkOutTime) {
+    return "Half-Day Present";
+  }
+
+  return "Absent";
+};
+
+
+const finalizeAttendanceForDay = async (
+  day = getToday(),
+  asOf = new Date()
+) => {
+  if (!hasDailyFinalizationWindowOpened(day)) {
+    return day;
+  }
+
   const date = new Date(`${day}T12:00:00.000Z`);
   const dayOfWeek = date.getUTCDay();
 
@@ -92,6 +381,7 @@ const ensurePreviousDayAttendance = async () => {
   if (holiday) return day;
 
   const { start, end } = getDayBounds(day);
+  const permissionDateBounds = getUtcDateBounds(day);
   const approvedLeaves = await LeaveApply.find({
     status: "Approved",
     $or: [
@@ -100,16 +390,40 @@ const ensurePreviousDayAttendance = async () => {
         toDate: { $gte: start },
       },
       {
+        leaveType: { $in: ["PERMISSION", "Permission"] },
+        fromDate: {
+          $gte: permissionDateBounds.start,
+          $lt: permissionDateBounds.end,
+        },
+      },
+      {
         compOffDate: { $gte: start, $lte: end },
       },
     ],
   }).lean();
+  const permissionRequestsForDay = await LeaveApply.find({
+    leaveType: { $in: ["PERMISSION", "Permission"] },
+    status: { $in: ["Pending", "Approved", "Rejected"] },
+    fromDate: {
+      $gte: permissionDateBounds.start,
+      $lt: permissionDateBounds.end,
+    },
+  })
+    .select("user_id leaveType fromTime toTime totalHours status")
+    .lean();
 
   const leavesByUser = new Map();
   for (const leave of approvedLeaves) {
     const userLeaves = leavesByUser.get(leave.user_id) || [];
     userLeaves.push(leave);
     leavesByUser.set(leave.user_id, userLeaves);
+  }
+  const permissionRequestsByUser = new Map();
+  for (const permission of permissionRequestsForDay) {
+    const userPermissions =
+      permissionRequestsByUser.get(permission.user_id) || [];
+    userPermissions.push(permission);
+    permissionRequestsByUser.set(permission.user_id, userPermissions);
   }
 
   const employees = await Employee.find({
@@ -127,13 +441,8 @@ const ensurePreviousDayAttendance = async () => {
       (leave) => String(leave.leaveType).toUpperCase() !== "PERMISSION"
     );
     if (hasFullDayLeave) continue;
-
-    const permissionHours = userLeaves
-      .filter(
-        (leave) =>
-          String(leave.leaveType).toUpperCase() === "PERMISSION"
-      )
-      .reduce((total, leave) => total + Number(leave.totalHours || 0), 0);
+    const permissionRequests =
+      permissionRequestsByUser.get(employee.user_id) || [];
 
     let attendance = attendanceByUser.get(employee.user_id);
     if (!attendance) {
@@ -160,6 +469,10 @@ const ensurePreviousDayAttendance = async () => {
       attendanceByUser.set(employee.user_id, attendance);
     }
 
+    if (attendance.finalizedAt) {
+      continue;
+    }
+
     if (
       attendance.approvalStatus === "Approved" ||
       attendance.approvalStatus === "Rejected"
@@ -167,17 +480,65 @@ const ensurePreviousDayAttendance = async () => {
       continue;
     }
 
+    if (attendance.checkOutTime) {
+      attendance.totalWorkingSeconds = getTotalWorkingSeconds(
+        attendance,
+        asOf
+      );
+    }
+
+    const permissionCredit = getPermissionCreditInfo(
+      attendance,
+      permissionRequests,
+      asOf
+    );
+    const monthlyPermissionUsedHours =
+      await getMonthlyPermissionUsedHours(employee.user_id, day);
     const attendanceStatus = attendance.checkInTime
       ? getSuggestedAttendanceStatus(
           attendance,
-          permissionHours,
-          end < new Date() ? end : new Date()
+          asOf,
+          permissionCredit.approvedPermissionHours,
+          permissionCredit.lateArrivalUncoveredMinutes
         )
       : "Absent";
 
-    attendance.attendanceStatus = attendanceStatus;
-    attendance.approvalStatus = "Pending";
-    await attendance.save();
+    const finalizedAt = new Date();
+    const update = {
+      totalWorkingSeconds: attendance.totalWorkingSeconds,
+      requestedPermissionHours:
+        permissionCredit.requestedPermissionHours,
+      approvedPermissionRequestedHours:
+        permissionCredit.approvedPermissionRequestedHours,
+      approvedPermissionHours:
+        permissionCredit.approvedPermissionHours,
+      totalCreditedWorkingSeconds:
+        (Number(attendance.totalWorkingSeconds) || 0) +
+        permissionCredit.approvedPermissionHours * 3600,
+      permissionStatus: permissionCredit.permissionStatus,
+      monthlyPermissionUsedHours,
+      monthlyPermissionRemainingHours: Math.max(
+        0,
+        MONTHLY_PERMISSION_LIMIT_HOURS - monthlyPermissionUsedHours
+      ),
+      finalizedAt,
+      approvalStatus: "Pending",
+    };
+
+    await Attendance.updateOne(
+      { _id: attendance._id },
+      { $set: update }
+    );
+
+    if (!attendance.attendanceStatusManuallyCorrected) {
+      await Attendance.updateOne(
+        {
+          _id: attendance._id,
+          attendanceStatusManuallyCorrected: { $ne: true },
+        },
+        { $set: { attendanceStatus } }
+      );
+    }
   }
 
   return day;
@@ -212,6 +573,93 @@ const calculateWorkingSeconds = (
   );
 };
 
+const getPermissionRequestsForDay = async (user_id, day) => {
+  const { start, end } = getUtcDateBounds(day);
+  return LeaveApply.find({
+    user_id,
+    leaveType: { $in: ["PERMISSION", "Permission"] },
+    status: { $in: ["Pending", "Approved", "Rejected"] },
+    fromDate: { $gte: start, $lt: end },
+  })
+    .select("fromTime toTime totalHours status")
+    .lean();
+};
+
+const getMonthlyPermissionUsedHours = async (user_id, day) => {
+  const { start, end } = getUtcMonthBounds(day);
+  const approvedPermissions = await LeaveApply.find({
+    user_id,
+    status: "Approved",
+    leaveType: { $in: ["PERMISSION", "Permission"] },
+    fromDate: { $gte: start, $lt: end },
+  })
+    .select("totalHours")
+    .lean();
+  return approvedPermissions.reduce(
+    (total, permission) => total + (Number(permission.totalHours) || 0),
+    0
+  );
+};
+
+const refreshAttendanceStatus = async (user_id, day) => {
+  const attendance = await Attendance.findOne({ user_id, day });
+  if (
+    !attendance ||
+    (!attendance.finalizedAt && !attendance.checkOutTime)
+  ) {
+    return attendance;
+  }
+
+  const asOf = attendance.checkOutTime || new Date();
+  const permissions = await getPermissionRequestsForDay(user_id, day);
+  const permissionCredit = getPermissionCreditInfo(
+    attendance,
+    permissions,
+    asOf
+  );
+  const monthlyPermissionUsedHours =
+    await getMonthlyPermissionUsedHours(user_id, day);
+  const update = {
+    requestedPermissionHours:
+      permissionCredit.requestedPermissionHours,
+    approvedPermissionRequestedHours:
+      permissionCredit.approvedPermissionRequestedHours,
+    approvedPermissionHours:
+      permissionCredit.approvedPermissionHours,
+    totalCreditedWorkingSeconds:
+      getTotalWorkingSeconds(attendance, asOf) +
+      permissionCredit.approvedPermissionHours * 3600,
+    permissionStatus: permissionCredit.permissionStatus,
+    monthlyPermissionUsedHours,
+    monthlyPermissionRemainingHours: Math.max(
+      0,
+      MONTHLY_PERMISSION_LIMIT_HOURS - monthlyPermissionUsedHours
+    ),
+  };
+  await Attendance.updateOne(
+    { _id: attendance._id },
+    { $set: update }
+  );
+
+  if (!attendance.attendanceStatusManuallyCorrected) {
+    const attendanceStatus = getSuggestedAttendanceStatus(
+      attendance,
+      asOf,
+      permissionCredit.approvedPermissionHours,
+      permissionCredit.lateArrivalUncoveredMinutes
+    );
+    await Attendance.updateOne(
+      {
+        _id: attendance._id,
+        attendanceStatusManuallyCorrected: { $ne: true },
+      },
+      { $set: { attendanceStatus } }
+    );
+  }
+
+  return Attendance.findById(attendance._id);
+};
+
 // CHECK IN
 const checkIn = async (user_id) => {
   const employee = await Employee.findOne({
@@ -231,17 +679,23 @@ const checkIn = async (user_id) => {
     error.statusCode = 400;
     throw error;
   }
-
   const day = getToday();
-
   const existingAttendance = await Attendance.findOne({
     user_id,
     day,
   });
+  if (existingAttendance?.finalizedAt) {
+    const error = new Error(
+      "Today's attendance has already been finalized"
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
   const checkInTime = new Date();
 
   if (!existingAttendance) {
-    return Attendance.create({
+    const newAttendance = {
       day,
       user_id: employee.user_id,
       employeeId: employee.employeeId,
@@ -250,7 +704,44 @@ const checkIn = async (user_id) => {
       checkOutTime: null,
       totalWorkingSeconds: 0,
       sessions: [{ checkInTime }],
+      finalizedAt: null,
+    };
+
+    return Attendance.create({
+      ...newAttendance,
+      attendanceStatus: "In Progress",
     });
+  }
+
+  if (!existingAttendance.checkInTime) {
+    const attendance = await Attendance.findOneAndUpdate(
+      {
+        _id: existingAttendance._id,
+        checkInTime: null,
+      },
+      {
+        $set: {
+          checkInTime,
+          checkOutTime: null,
+          totalWorkingSeconds: 0,
+          attendanceStatus: "In Progress",
+          finalizedAt: null,
+          sessions: [{ checkInTime }],
+        },
+      },
+      { returnDocument: "after" }
+    );
+
+    if (!attendance) {
+      const error = new Error("Unable to create attendance check-in");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    return {
+      ...attendance.toObject(),
+      activeCheckInTime: checkInTime,
+    };
   }
 
   if (!existingAttendance.checkOutTime) {
@@ -282,12 +773,14 @@ const checkIn = async (user_id) => {
     {
       $set: {
         checkOutTime: null,
+        attendanceStatus: "In Progress",
+        finalizedAt: null,
       },
       $push: {
         sessions: { $each: sessionsToAppend },
       },
     },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   if (!attendance) {
@@ -325,6 +818,14 @@ const checkOut = async (user_id) => {
     throw error;
   }
 
+  if (attendance.finalizedAt) {
+    const error = new Error(
+      "Today's attendance has already been finalized"
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
   if (attendance.checkOutTime) {
     const error = new Error(
       "Employee is not currently checked in"
@@ -349,12 +850,13 @@ const checkOut = async (user_id) => {
       activeCheckInTime,
       checkOutTime
     );
+  const accumulatedWorkingSeconds =
+    (attendance.totalWorkingSeconds || 0) +
+    totalWorkingSeconds;
 
   const update = {
     checkOutTime,
-    totalWorkingSeconds:
-      (attendance.totalWorkingSeconds || 0) +
-      totalWorkingSeconds,
+    totalWorkingSeconds: accumulatedWorkingSeconds,
   };
 
   if (activeSessionIndex >= 0) {
@@ -372,6 +874,41 @@ const checkOut = async (user_id) => {
     ];
   }
 
+  const permissions = await getPermissionRequestsForDay(user_id, day);
+  const permissionCredit = getPermissionCreditInfo(
+    {
+      ...attendance.toObject(),
+      ...update,
+    },
+    permissions,
+    checkOutTime
+  );
+  update.attendanceStatus = getSuggestedAttendanceStatus(
+    {
+      ...attendance.toObject(),
+      ...update,
+    },
+    checkOutTime,
+    permissionCredit.approvedPermissionHours,
+    permissionCredit.lateArrivalUncoveredMinutes
+  );
+  update.requestedPermissionHours =
+    permissionCredit.requestedPermissionHours;
+  update.approvedPermissionRequestedHours =
+    permissionCredit.approvedPermissionRequestedHours;
+  update.approvedPermissionHours =
+    permissionCredit.approvedPermissionHours;
+  update.totalCreditedWorkingSeconds =
+    accumulatedWorkingSeconds +
+    permissionCredit.approvedPermissionHours * 3600;
+  update.permissionStatus = permissionCredit.permissionStatus;
+  update.monthlyPermissionUsedHours =
+    await getMonthlyPermissionUsedHours(user_id, day);
+  update.monthlyPermissionRemainingHours = Math.max(
+    0,
+    MONTHLY_PERMISSION_LIMIT_HOURS - update.monthlyPermissionUsedHours
+  );
+
   const updatedAttendance =
     await Attendance.findOneAndUpdate(
       {
@@ -379,7 +916,7 @@ const checkOut = async (user_id) => {
         checkOutTime: null,
       },
       { $set: update },
-      { new: true }
+      { returnDocument: "after" }
     );
 
   if (!updatedAttendance) {
@@ -402,6 +939,15 @@ const formatAttendance = (attendance) => {
   const data = attendance.toObject
     ? attendance.toObject()
     : attendance;
+  if (
+    data.day === getToday() &&
+    !data.finalizedAt &&
+    !data.checkOutTime &&
+    !data.attendanceStatusManuallyCorrected
+  ) {
+    data.attendanceStatus = "In Progress";
+  }
+
   if (!data.checkInTime) {
     data.currentWorkingSeconds = 0;
     data.isCheckedIn = false;
@@ -439,6 +985,85 @@ const formatAttendance = (attendance) => {
   }
 
   return data;
+};
+
+const formatAttendanceWithPermissions = async (attendances) => {
+  const formatted = attendances.map(formatAttendance);
+  if (formatted.length === 0) return formatted;
+
+  const days = formatted.map((attendance) => attendance.day).sort();
+  const userIds = [...new Set(formatted.map((attendance) => attendance.user_id))];
+  const { start } = getUtcMonthBounds(days[0]);
+  const { end } = getUtcMonthBounds(days[days.length - 1]);
+  const permissions = await LeaveApply.find({
+    user_id: { $in: userIds },
+    leaveType: { $in: ["PERMISSION", "Permission"] },
+    fromDate: { $gte: start, $lt: end },
+    status: { $in: ["Pending", "Approved", "Rejected"] },
+  })
+    .select("user_id fromDate fromTime toTime totalHours status")
+    .lean();
+  const employees = await Employee.find({ user_id: { $in: userIds } })
+    .select("user_id name employeeId")
+    .lean();
+  const employeeByUser = new Map(
+    employees.map((employee) => [employee.user_id, employee])
+  );
+
+  const byUserAndDay = new Map();
+  const monthlyUsage = new Map();
+  for (const permission of permissions) {
+    const permissionDay = new Date(permission.fromDate).toISOString().slice(0, 10);
+    const permissionMonth = permissionDay.slice(0, 7);
+    const key = `${permission.user_id}:${permissionDay}`;
+    const dayPermissions = byUserAndDay.get(key) || [];
+    dayPermissions.push(permission);
+    byUserAndDay.set(key, dayPermissions);
+
+    if (permission.status === "Approved") {
+      const monthKey = `${permission.user_id}:${permissionMonth}`;
+      monthlyUsage.set(
+        monthKey,
+        (monthlyUsage.get(monthKey) || 0) + (Number(permission.totalHours) || 0)
+      );
+    }
+  }
+
+  return formatted.map((attendance) => {
+    const requests =
+      byUserAndDay.get(`${attendance.user_id}:${attendance.day}`) || [];
+    const asOf = attendance.checkOutTime || new Date();
+    const permissionCredit = getPermissionCreditInfo(
+      attendance,
+      requests,
+      asOf
+    );
+    const actualWorkingSeconds = Number(attendance.currentWorkingSeconds) || 0;
+    const monthlyPermissionUsedHours =
+      monthlyUsage.get(`${attendance.user_id}:${attendance.day.slice(0, 7)}`) || 0;
+    const employee = employeeByUser.get(attendance.user_id);
+
+    return {
+      ...attendance,
+      employeeName: employee?.name || "",
+      employeeId: employee?.employeeId || attendance.employeeId,
+      actualWorkingSeconds,
+      actualWorkingHours: actualWorkingSeconds / 3600,
+      ...permissionCredit,
+      totalCreditedWorkingSeconds:
+        actualWorkingSeconds +
+        permissionCredit.approvedPermissionHours * 3600,
+      totalCreditedWorkingHours:
+        actualWorkingSeconds / 3600 +
+        permissionCredit.approvedPermissionHours,
+      monthlyPermissionAllowanceHours: MONTHLY_PERMISSION_LIMIT_HOURS,
+      monthlyPermissionUsedHours,
+      monthlyPermissionRemainingHours: Math.max(
+        0,
+        MONTHLY_PERMISSION_LIMIT_HOURS - monthlyPermissionUsedHours
+      ),
+    };
+  });
 };
 
 // DAILY ATTENDANCE
@@ -482,7 +1107,7 @@ const getDailyAttendance = async (
       employeeId: 1,
     });
 
-  return attendance.map(formatAttendance);
+  return formatAttendanceWithPermissions(attendance);
 };
 
 // ATTENDANCE HISTORY
@@ -523,21 +1148,152 @@ const getAttendanceHistory = async (
     filter.day = selectedDate;
   }
 
-  await ensurePreviousDayAttendance();
-
   const attendance =
     await Attendance.find(filter).sort({
       day: -1,
       employeeId: 1,
     });
 
-  return attendance.map(formatAttendance);
+  return formatAttendanceWithPermissions(attendance);
+};
+
+const getAttendanceExportRows = async (startDate, endDate, leaveType = "ALL") => {
+  const rangeStart = new Date(`${startDate}T00:00:00.000Z`);
+  const rangeEnd = new Date(`${endDate}T23:59:59.999Z`);
+  const leaveTypeAliases = {
+    CL: ["CL", "Casual Leave"],
+    SL: ["SL", "Sick Leave"],
+    COMP_OFF: ["COMP_OFF"],
+    PERMISSION: ["PERMISSION", "Permission"],
+  };
+  const selectedTypes =
+    leaveType === "ALL"
+      ? Object.values(leaveTypeAliases).flat()
+      : leaveTypeAliases[leaveType];
+  const [attendance, approvedLeaves] = await Promise.all([
+    Attendance.find({
+      day: { $gte: startDate, $lte: endDate },
+    })
+      .sort({ day: 1, employeeId: 1 })
+      .lean(),
+    LeaveApply.find({
+      status: "Approved",
+      leaveType: { $in: selectedTypes },
+      fromDate: { $lte: rangeEnd },
+      $or: [{ toDate: null }, { toDate: { $gte: rangeStart } }],
+    })
+      .select("user_id leaveType fromDate toDate totalHours")
+      .lean(),
+  ]);
+  const userIds = [
+    ...new Set([
+      ...attendance.map((record) => record.user_id),
+      ...approvedLeaves.map((leave) => leave.user_id),
+    ]),
+  ];
+  const employees = await Employee.find({ user_id: { $in: userIds } })
+    .select("user_id name employeeId")
+    .lean();
+  const employeeByUser = new Map(
+    employees.map((employee) => [employee.user_id, employee])
+  );
+
+  const rowsByUserAndDay = new Map();
+  const attendanceByUserAndDay = new Map(
+    attendance.map((record) => [`${record.user_id}:${record.day}`, record])
+  );
+  if (leaveType === "ALL") {
+    for (const record of attendance) {
+      rowsByUserAndDay.set(`${record.user_id}:${record.day}`, {
+        userId: record.user_id,
+        employeeId: record.employeeId,
+        date: record.day,
+        attendanceStatus: record.attendanceStatus || "",
+        leaveType: "",
+        permissionHours: 0,
+      });
+    }
+  }
+
+  for (const leave of approvedLeaves) {
+    if (!leave.fromDate || !leave.user_id) continue;
+
+    const leaveStart = new Date(leave.fromDate).toISOString().slice(0, 10);
+    const leaveEnd = leave.toDate
+      ? new Date(leave.toDate).toISOString().slice(0, 10)
+      : leaveStart;
+    const firstDay = leaveStart < startDate ? startDate : leaveStart;
+    const lastDay = leaveEnd > endDate ? endDate : leaveEnd;
+    if (firstDay > lastDay) continue;
+
+    const rawLeaveType = String(leave.leaveType || "").toUpperCase();
+    const normalizedLeaveType =
+      rawLeaveType === "CL" || rawLeaveType === "CASUAL LEAVE"
+        ? "Casual Leave"
+        : rawLeaveType === "SL" || rawLeaveType === "SICK LEAVE"
+          ? "Sick Leave"
+          : rawLeaveType === "COMP_OFF"
+            ? "Compensatory Off"
+            : rawLeaveType === "PERMISSION"
+              ? "Permission"
+              : "";
+    if (!normalizedLeaveType) continue;
+
+    const cursor = new Date(`${firstDay}T00:00:00.000Z`);
+    const lastDate = new Date(`${lastDay}T00:00:00.000Z`);
+    while (cursor <= lastDate) {
+      const date = cursor.toISOString().slice(0, 10);
+      const key = `${leave.user_id}:${date}`;
+      const attendanceRecord = attendanceByUserAndDay.get(key);
+      const row = rowsByUserAndDay.get(key) || {
+        userId: leave.user_id,
+        employeeId: attendanceRecord?.employeeId || "",
+        date,
+        attendanceStatus:
+          attendanceRecord?.attendanceStatus ||
+          (normalizedLeaveType === "Permission" ? "Permission" : "On Leave"),
+        leaveType: "",
+        permissionHours: 0,
+      };
+
+      const leaveTypes = new Set(
+        row.leaveType ? row.leaveType.split(", ") : []
+      );
+      leaveTypes.add(normalizedLeaveType);
+      row.leaveType = [...leaveTypes].join(", ");
+      if (normalizedLeaveType === "Permission") {
+        row.permissionHours += Number(leave.totalHours) || 0;
+      }
+
+      rowsByUserAndDay.set(key, row);
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+  }
+
+  return [...rowsByUserAndDay.values()]
+    .map((row) => {
+      const employee = employeeByUser.get(row.userId);
+      return {
+        employeeId: row.employeeId || employee?.employeeId || "",
+        employeeName: employee?.name || "",
+        date: row.date,
+        attendanceStatus: row.attendanceStatus,
+        leaveType: row.leaveType,
+        permissionDuration:
+          row.permissionHours > 0 ? `${row.permissionHours} hours` : "",
+      };
+    })
+    .sort(
+      (left, right) =>
+        left.date.localeCompare(right.date) ||
+        left.employeeId.localeCompare(right.employeeId)
+    );
 };
 
 const getAttendanceApprovals = async () => {
-  await ensurePreviousDayAttendance();
   return Attendance.find({
     approvalStatus: "Pending",
+    finalizedAt: { $ne: null },
     day: { $lt: getToday() },
   })
     .sort({ day: -1, employeeId: 1 })
@@ -555,21 +1311,12 @@ const reviewAttendance = async (
     throw error;
   }
 
-  const attendance = await Attendance.findOneAndUpdate(
-    {
-      _id: attendanceId,
-      approvalStatus: "Pending",
-      day: { $lt: getToday() },
-    },
-    {
-      $set: {
-        approvalStatus: decision,
-        reviewedBy: reviewerId,
-        reviewedAt: new Date(),
-      },
-    },
-    { new: true }
-  );
+  const attendance = await Attendance.findOne({
+    _id: attendanceId,
+    approvalStatus: "Pending",
+    finalizedAt: { $ne: null },
+    day: { $lt: getToday() },
+  });
 
   if (!attendance) {
     const error = new Error(
@@ -578,6 +1325,21 @@ const reviewAttendance = async (
     error.statusCode = 404;
     throw error;
   }
+
+  const nextStatus =
+    decision === "Approved" &&
+    ["Late Present", "Present Late"].includes(
+      attendance.attendanceStatus
+    )
+      ? "Present"
+      : attendance.attendanceStatus;
+
+  attendance.approvalStatus = decision;
+  attendance.reviewedBy = reviewerId;
+  attendance.reviewedAt = new Date();
+  attendance.attendanceStatus = nextStatus;
+
+  await attendance.save();
 
   return attendance;
 };
@@ -605,12 +1367,117 @@ const getEmployeeAttendance = async (
   );
 };
 
+const correctAttendanceStatus = async (
+  user_id,
+  day,
+  currentStatus,
+  newStatus,
+  reason,
+  hrUserId
+) => {
+  const cleanUserId = typeof user_id === "string" ? user_id.trim() : "";
+  const cleanDay = typeof day === "string" ? day.trim() : "";
+  const cleanReason = typeof reason === "string" ? reason.trim() : "";
+
+  if (!cleanUserId || !cleanDay || !hrUserId) {
+    const error = new Error("Employee ID, date, and HR user ID are required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!isValidDate(cleanDay)) {
+    const error = new Error("Invalid date. Use YYYY-MM-DD format");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const allowedCorrections = {
+    Absent: ["Present"],
+    Present: ["Absent"],
+    "Half-Day Present": ["Present"],
+    Pending: ["Present"],
+    "Late Present": ["Present"],
+  };
+  if (
+    !Object.prototype.hasOwnProperty.call(
+      allowedCorrections,
+      currentStatus
+    ) ||
+    !allowedCorrections[currentStatus].includes(newStatus)
+  ) {
+    const error = new Error(
+      "Attendance can only be changed from Absent to Present, Present to Absent, or Half-Day Present, Pending, or Late Present to Present"
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!cleanReason || cleanReason.length > 1000) {
+    const error = new Error(
+      "A correction reason of 1 to 1000 characters is required"
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const modifiedAt = new Date();
+  const attendance = await Attendance.findOneAndUpdate(
+    {
+      user_id: cleanUserId,
+      day: cleanDay,
+      attendanceStatus: currentStatus,
+    },
+    {
+      $set: {
+        attendanceStatus: newStatus,
+        attendanceStatusManuallyCorrected: true,
+      },
+      $push: {
+        attendanceCorrections: {
+          hrUserId,
+          previousStatus: currentStatus,
+          newStatus,
+          reason: cleanReason,
+          modifiedAt,
+        },
+      },
+    },
+    { new: true, runValidators: true }
+  );
+
+  if (attendance) return attendance;
+
+  const existingAttendance = await Attendance.findOne({
+    user_id: cleanUserId,
+    day: cleanDay,
+  }).select("attendanceStatus");
+
+  if (!existingAttendance) {
+    const error = new Error("Attendance record was not found for this employee and date");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const error = new Error(
+    `Attendance status is ${existingAttendance.attendanceStatus}; expected ${currentStatus}`
+  );
+  error.statusCode = 409;
+  throw error;
+};
+
 module.exports = {
   checkIn,
   checkOut,
   getDailyAttendance,
   getAttendanceHistory,
+  getAttendanceExportRows,
   getEmployeeAttendance,
   getAttendanceApprovals,
   reviewAttendance,
+  correctAttendanceStatus,
+  refreshAttendanceStatus,
+  finalizeAttendanceForDay,
+  getSuggestedAttendanceStatus,
+  getPermissionCreditInfo,
+  hasDailyFinalizationWindowOpened,
 };

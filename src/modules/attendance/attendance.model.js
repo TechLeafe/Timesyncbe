@@ -41,6 +41,42 @@ const attendanceSchema = new mongoose.Schema(
       default: null,
     },
 
+    requestedPermissionHours: {
+      type: Number,
+      default: 0,
+    },
+
+    approvedPermissionHours: {
+      type: Number,
+      default: 0,
+    },
+
+    approvedPermissionRequestedHours: {
+      type: Number,
+      default: 0,
+    },
+
+    totalCreditedWorkingSeconds: {
+      type: Number,
+      default: 0,
+    },
+
+    permissionStatus: {
+      type: String,
+      enum: ["Pending", "Approved", "Rejected", "Mixed", null],
+      default: null,
+    },
+
+    monthlyPermissionUsedHours: {
+      type: Number,
+      default: 0,
+    },
+
+    monthlyPermissionRemainingHours: {
+      type: Number,
+      default: 4,
+    },
+
     sessions: [
       {
         checkInTime: {
@@ -60,8 +96,54 @@ const attendanceSchema = new mongoose.Schema(
 
     attendanceStatus: {
       type: String,
-      enum: ["Pending", "Present", "Present Late", "Absent"],
+      enum: [
+        "Pending",
+        "In Progress",
+        "Present",
+        "Half-Day Present",
+        "Late Present",
+        "Present Late",
+        "Early Departure",
+        "Absent",
+      ],
       default: "Pending",
+    },
+
+    attendanceStatusManuallyCorrected: {
+      type: Boolean,
+      default: false,
+    },
+
+    attendanceCorrections: [
+      {
+        hrUserId: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        previousStatus: {
+          type: String,
+          required: true,
+        },
+        newStatus: {
+          type: String,
+          required: true,
+        },
+        reason: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        modifiedAt: {
+          type: Date,
+          required: true,
+        },
+      },
+    ],
+
+    finalizedAt: {
+      type: Date,
+      default: null,
     },
 
     approvalStatus: {

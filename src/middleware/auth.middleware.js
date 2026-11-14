@@ -1,55 +1,53 @@
 const jwt = require("jsonwebtoken");
 
+// JWT AUTHENTICATION MIDDLEWARE
 const authMiddleware = (req, res, next) => {
   try {
+    // Get authorization header
     const authHeader = req.headers.authorization;
 
-    // Authorization header missing
     if (!authHeader) {
       return res.status(401).json({
         success: false,
         message: "Authorization token is required",
       });
     }
-//testing
-    // Check Bearer format
-    if (!authHeader.startsWith("Bearer ")) {
+
+    // Validate Bearer token format
+    const match = authHeader.match(/^Bearer\s+(\S+)$/i);
+
+    if (!match) {
       return res.status(401).json({
         success: false,
         message: "Invalid authorization format. Use Bearer token",
       });
     }
 
-    // Extract token
-    const token = authHeader.split(" ")[1];
+    // Extract JWT token
+    const token = match[1];
 
-    if (!token) {
-      return res.status(401).json({
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({
         success: false,
-        message: "Token is required",
+        message: "JWT configuration is missing",
       });
     }
 
-const decoded = jwt.verify(
-  token,
-  process.env.JWT_SECRET
-);
+    // Verify token
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET,
+      {
+        algorithms: ["HS256"],
+      }
+    );
 
-console.log("========== JWT DEBUG ==========");
-console.log("DECODED TOKEN:", decoded);
-console.log("USER ID:", decoded.user_id);
-console.log("MONGO ID:", decoded.id);
-console.log("EMAIL:", decoded.email);
-console.log("USER TYPE:", decoded.userType);
-console.log("================================");
-console.log("================================");
-req.user = decoded;
-    // Store decoded user information
+    // Store authenticated user information
     req.user = decoded;
 
+    // Continue to next middleware/controller
     next();
   } catch (error) {
-    // Token expired
     if (error.name === "TokenExpiredError") {
       return res.status(401).json({
         success: false,
@@ -57,7 +55,6 @@ req.user = decoded;
       });
     }
 
-    // Invalid token
     if (error.name === "JsonWebTokenError") {
       return res.status(401).json({
         success: false,
@@ -65,10 +62,7 @@ req.user = decoded;
       });
     }
 
-    return res.status(401).json({
-      success: false,
-      message: "Authentication failed",
-    });
+    next(error);
   }
 };
 

@@ -28,7 +28,7 @@ const updateLeave = async (id, leaveData) => {
         id,
         leaveData,
         {
-            new: true,
+            returnDocument: "after",
             runValidators: true
         }
     );
@@ -37,8 +37,13 @@ const updateLeave = async (id, leaveData) => {
 };
 
 // Delete leave policy
-const deleteLeave = async (id) => {
-    const leave = await Leave.findByIdAndDelete(id);
+const deleteLeave = async (id, policyName, businessYear) => {
+    const leave = id
+        ? await Leave.findByIdAndDelete(id)
+        : await Leave.findOneAndDelete({
+            policyName,
+            businessYear
+        });
 
     return leave;
 };
