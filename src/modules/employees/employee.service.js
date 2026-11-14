@@ -99,7 +99,7 @@ const createEmployee = async (employeeData) => {
 // GET ALL EMPLOYEES
 const getAllEmployees = async () => {
   return await Employee.find()
-    .select("-password")
+    .select("-password -photo")
     .populate("team", "name")
     .sort({ createdAt: -1 });
 };

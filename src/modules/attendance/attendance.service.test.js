@@ -4,7 +4,9 @@ const {
   getSuggestedAttendanceStatus,
   getPermissionCreditInfo,
   hasDailyFinalizationWindowOpened,
+  correctAttendanceStatus,
 } = require("./attendance.service");
+const Attendance = require("./attendance.model");
 
 const makeAttendance = ({
   checkIn = "2026-11-02T09:00:00+05:30",
@@ -243,4 +245,30 @@ test("permission outside the late-arrival gap does not clear Late Present", () =
     ),
     "Late Present"
   );
+});
+
+test("Pending and Late Present attendance can be corrected to Present", async () => {
+  const originalFindOneAndUpdate = Attendance.findOneAndUpdate;
+  Attendance.findOneAndUpdate = async (filter, update) => ({
+    user_id: filter.user_id,
+    day: filter.day,
+    attendanceStatus: update.$set.attendanceStatus,
+  });
+
+  try {
+    for (const currentStatus of ["Pending", "Late Present"]) {
+      const attendance = await correctAttendanceStatus(
+        "employee-1",
+        "2026-11-02",
+        currentStatus,
+        "Present",
+        "Correcting attendance status",
+        "hr-1"
+      );
+
+      assert.equal(attendance.attendanceStatus, "Present");
+    }
+  } finally {
+    Attendance.findOneAndUpdate = originalFindOneAndUpdate;
+  }
 });

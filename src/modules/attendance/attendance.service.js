@@ -1395,6 +1395,8 @@ const correctAttendanceStatus = async (
     Absent: ["Present"],
     Present: ["Absent"],
     "Half-Day Present": ["Present"],
+    Pending: ["Present"],
+    "Late Present": ["Present"],
   };
   if (
     !Object.prototype.hasOwnProperty.call(
@@ -1404,7 +1406,7 @@ const correctAttendanceStatus = async (
     !allowedCorrections[currentStatus].includes(newStatus)
   ) {
     const error = new Error(
-      "Attendance can only be changed from Absent to Present, Present to Absent, or Half-Day Present to Present"
+      "Attendance can only be changed from Absent to Present, Present to Absent, or Half-Day Present, Pending, or Late Present to Present"
     );
     error.statusCode = 400;
     throw error;

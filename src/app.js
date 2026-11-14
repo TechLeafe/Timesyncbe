@@ -14,11 +14,19 @@ const birthdayCreationRoutes = require(
   "./modules/birthdayCreation/birthdayCreation.routes"
 );
 
+const monthlyAchievementRoutes = require(
+  "./modules/monthlyAchievement/monthlyAchievement.routes"
+);
+
 const errorMiddleware = require("./middleware/error.middleware");
 
 const app = express();
 
 app.use(cors());
+app.use(
+  "/api/monthly-achievement",
+  express.json({ limit: "15mb" })
+);
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -50,6 +58,10 @@ app.use("/api/birthday-creation", birthdayCreationRoutes);
 
 console.log("Birthday Creation routes registered");
 
+app.use(
+  "/api/monthly-achievement",
+  monthlyAchievementRoutes
+);
 // Error middleware must be last
 app.use(errorMiddleware);
 module.exports = app;

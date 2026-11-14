@@ -16,7 +16,7 @@ const employeeSchema = new mongoose.Schema(
       unique: true,
       trim: true,
     },
-//TESTING
+
     name: {
       type: String,
       required: true,
@@ -47,7 +47,12 @@ const employeeSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    
+    photo: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
     team: {
       type: String,
       required: true,
