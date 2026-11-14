@@ -9,6 +9,7 @@ const attendanceRoutes = require("./modules/attendance/attendance.routes");
 const holidayRoutes = require("./modules/holidays/holiday.routes");
 const dashboardRoutes = require("./modules/dashboard/dashboard.routes");
 const dailyTaskRouter = require("./modules/dailyTasks/dailyTask.router");
+const birthdayCreationRoutes = require("./modules/birthdayCreation/birthdayCreation.routes");
 
 const errorMiddleware = require("./middleware/error.middleware");
 
@@ -32,6 +33,7 @@ app.use("/api/attendance", attendanceRoutes);
 app.use("/api/holidays", holidayRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/daily-tasks", dailyTaskRouter);
+app.use("/api/birthday-creation", birthdayCreationRoutes);
 
 // Error middleware should always be registered LAST
 app.use(errorMiddleware);
