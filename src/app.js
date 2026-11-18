@@ -21,7 +21,10 @@ const monthlyAchievementRoutes = require(
   "./modules/monthlyAchievement/monthlyAchievement.routes"
 );
 
-// Error middleware
+const dailyInspirationRoutes = require(
+  "./modules/dailyInspiration/dailyInspiration.routes"
+); 
+
 const errorMiddleware = require("./middleware/error.middleware");
 
 const app = express();
@@ -65,8 +68,7 @@ app.use("/api/holidays", holidayRoutes);
 
 // Dashboard routes
 app.use("/api/dashboard", dashboardRoutes);
-
-// Daily task routes
+app.use("/api/daily-inspiration", dailyInspirationRoutes);
 app.use("/api/daily-tasks", dailyTaskRouter);
 
 // Employee support routes
