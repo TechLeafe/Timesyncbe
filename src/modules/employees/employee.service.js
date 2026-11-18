@@ -161,9 +161,6 @@ const createEmployee = async (employeeData) => {
 const getAllEmployees = async () => {
   const employees = await Employee.find()
     .select("-password -photo")
-<<<<<<< HEAD
-    .sort({ createdAt: -1 });
-=======
     .populate("team", "name")
     .sort({ createdAt: -1 })
     .lean();
@@ -175,21 +172,16 @@ const getAllEmployees = async () => {
         ? employee.team.name
         : employee.team || "-",
   }));
->>>>>>> 9b9fc5286cb893715791ef79eda0b36e8768bf3b
 };
 
 // GET SINGLE EMPLOYEE
 const getEmployeeByUserId = async (user_id) => {
   const employee = await Employee.findOne({
     user_id: user_id.trim(),
-<<<<<<< HEAD
-  }).select("-password");
-=======
   })
     .select("-password")
     .populate("team", "name")
     .lean();
->>>>>>> 9b9fc5286cb893715791ef79eda0b36e8768bf3b
 
   if (!employee) {
     throw makeError(
