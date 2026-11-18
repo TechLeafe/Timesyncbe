@@ -1,8 +1,64 @@
+
 const bcrypt = require("bcryptjs");
 const mongoose = require("mongoose");
-const Employee = require("./employee.model");
 
-// Generate unique User ID
+const Employee = require("./employee.model");
+const Team = require("../teams/team.model");
+
+// ERROR HELPER
+const makeError = (message, statusCode) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+};
+
+// RESOLVE TEAM NAME OR OBJECT ID
+const resolveTeamId = async (teamValue) => {
+  if (
+    typeof teamValue !== "string" ||
+    !teamValue.trim()
+  ) {
+    throw makeError("Team is required", 400);
+  }
+
+  const value = teamValue.trim();
+
+  // If Team ObjectId is provided
+  if (mongoose.isObjectIdOrHexString(value)) {
+    const team = await Team.findById(value);
+
+    if (!team) {
+      throw makeError("Team ID not found", 404);
+    }
+
+    return team._id;
+  }
+
+  // Escape special regex characters
+  const escapedName = value.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
+
+  // Find existing team
+  let team = await Team.findOne({
+    name: {
+      $regex: `^${escapedName}$`,
+      $options: "i",
+    },
+  });
+
+  // Create team if not found
+  if (!team) {
+    team = await Team.create({
+      name: value,
+    });
+  }
+
+  return team._id;
+};
+
+// GENERATE UNIQUE USER ID
 const generateUserId = async () => {
   const lastEmployee = await Employee.findOne()
     .sort({ createdAt: -1 })
@@ -10,21 +66,28 @@ const generateUserId = async () => {
 
   let nextNumber = 1;
 
-  if (lastEmployee && lastEmployee.user_id) {
-    const match = lastEmployee.user_id.match(/USR(\d+)/);
+  if (lastEmployee?.user_id) {
+    const match = lastEmployee.user_id.match(
+      /^USR(\d+)$/
+    );
 
     if (match) {
-      nextNumber = parseInt(match[1], 10) + 1;
+      nextNumber = Number(match[1]) + 1;
     }
   }
 
-  return `USR${String(nextNumber).padStart(6, "0")}`;
+  let user_id;
+
+  do {
+    user_id = `USR${String(nextNumber).padStart(6, "0")}`;
+    nextNumber++;
+  } while (await Employee.exists({ user_id }));
+
+  return user_id;
 };
 
 // CREATE EMPLOYEE
 const createEmployee = async (employeeData) => {
-  
-
   const {
     employeeId,
     name,
@@ -36,86 +99,112 @@ const createEmployee = async (employeeData) => {
     userType,
   } = employeeData;
 
-  // Validate Team before saving
-  if (typeof team !== "string" || !team.trim()) {
-    const error = new Error("Team Name is required");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  console.log("CREATED EMPLOYEE TEAM:", team.trim());
+  // Convert team name into ObjectId
+  const teamObjectId = await resolveTeamId(team);
 
   // Check duplicate Employee ID
   const existingEmployee = await Employee.findOne({
-    employeeId,
+    employeeId: employeeId.trim(),
   });
 
   if (existingEmployee) {
-    const error = new Error("Employee ID already exists");
-    error.statusCode = 409;
-    throw error;
+    throw makeError(
+      "Employee ID already exists",
+      409
+    );
   }
 
+  // Check duplicate Email
+  const normalizedEmail = email.trim().toLowerCase();
+
   const existingEmail = await Employee.findOne({
-    email: email.toLowerCase(),
+    email: normalizedEmail,
   });
 
   if (existingEmail) {
-    const error = new Error("Email already exists");
-    error.statusCode = 409;
-    throw error;
+    throw makeError(
+      "Email already exists",
+      409
+    );
   }
 
-  let user_id = await generateUserId();
+  // Generate User ID
+  const user_id = await generateUserId();
 
-  while (await Employee.findOne({ user_id })) {
-    const match = user_id.match(/USR(\d+)/);
-    const nextNumber = parseInt(match[1], 10) + 1;
+  // Hash password
+  const hashedPassword = await bcrypt.hash(
+    password,
+    10
+  );
 
-    user_id = `USR${String(nextNumber).padStart(6, "0")}`;
-  }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-
+  // Create employee
   const employee = await Employee.create({
     user_id,
-    employeeId,
-    name,
-    email: email.toLowerCase(),
+    employeeId: employeeId.trim(),
+    name: name.trim(),
+    email: normalizedEmail,
     password: hashedPassword,
-    phone: phone && phone.trim() ? phone.trim() : "-",
-    designation,
-    team: team.trim(),
+    phone: phone?.trim() || "-",
+    designation: designation.trim(),
+    team: teamObjectId,
     userType,
     status: "Active",
   });
 
-  const employeeResponse = employee.toObject();
-  delete employeeResponse.password;
+  const result = employee.toObject();
+  delete result.password;
 
-  return employeeResponse;
+  return result;
 };
 
 // GET ALL EMPLOYEES
 const getAllEmployees = async () => {
-  return await Employee.find()
+  const employees = await Employee.find()
     .select("-password -photo")
+<<<<<<< HEAD
     .sort({ createdAt: -1 });
+=======
+    .populate("team", "name")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  return employees.map((employee) => ({
+    ...employee,
+    team:
+      employee.team && typeof employee.team === "object"
+        ? employee.team.name
+        : employee.team || "-",
+  }));
+>>>>>>> 9b9fc5286cb893715791ef79eda0b36e8768bf3b
 };
 
-// GET SINGLE EMPLOYEE BY USER ID
+// GET SINGLE EMPLOYEE
 const getEmployeeByUserId = async (user_id) => {
   const employee = await Employee.findOne({
     user_id: user_id.trim(),
+<<<<<<< HEAD
   }).select("-password");
+=======
+  })
+    .select("-password")
+    .populate("team", "name")
+    .lean();
+>>>>>>> 9b9fc5286cb893715791ef79eda0b36e8768bf3b
 
   if (!employee) {
-    const error = new Error("Employee not found");
-    error.statusCode = 404;
-    throw error;
+    throw makeError(
+      "Employee not found",
+      404
+    );
   }
 
-  return employee;
+  return {
+    ...employee,
+    team:
+      employee.team && typeof employee.team === "object"
+        ? employee.team.name
+        : employee.team || "-",
+  };
 };
 
 // UPDATE EMPLOYEE
@@ -133,52 +222,62 @@ const updateEmployee = async (employeeData) => {
     status,
   } = employeeData;
 
-  // Check valid MongoDB ObjectId
-  if (!mongoose.Types.ObjectId.isValid(_id)) {
-    const error = new Error("Invalid employee ID");
-    error.statusCode = 400;
-    throw error;
+  if (!mongoose.isObjectIdOrHexString(_id)) {
+    throw makeError(
+      "Invalid employee ID",
+      400
+    );
   }
 
-  // Find employee
   const employee = await Employee.findById(_id);
 
   if (!employee) {
-    const error = new Error("Employee not found");
-    error.statusCode = 404;
-    throw error;
+    throw makeError(
+      "Employee not found",
+      404
+    );
   }
 
   // Update Employee ID
-  if (employeeId && employeeId !== employee.employeeId) {
-    const existingEmployeeId = await Employee.findOne({
-      employeeId,
-      _id: { $ne: _id },
-    });
+  if (employeeId !== undefined) {
+    const newId = employeeId.trim();
 
-    if (existingEmployeeId) {
-      const error = new Error("Employee ID already exists");
-      error.statusCode = 409;
-      throw error;
+    if (newId !== employee.employeeId) {
+      const duplicate = await Employee.exists({
+        employeeId: newId,
+        _id: { $ne: _id },
+      });
+
+      if (duplicate) {
+        throw makeError(
+          "Employee ID already exists",
+          409
+        );
+      }
+
+      employee.employeeId = newId;
     }
-
-    employee.employeeId = employeeId;
   }
 
   // Update Email
-  if (email && email.toLowerCase() !== employee.email.toLowerCase()) {
-    const existingEmail = await Employee.findOne({
-      email: email.toLowerCase(),
-      _id: { $ne: _id },
-    });
+  if (email !== undefined) {
+    const newEmail = email.trim().toLowerCase();
 
-    if (existingEmail) {
-      const error = new Error("Email already exists");
-      error.statusCode = 409;
-      throw error;
+    if (newEmail !== employee.email) {
+      const duplicate = await Employee.exists({
+        email: newEmail,
+        _id: { $ne: _id },
+      });
+
+      if (duplicate) {
+        throw makeError(
+          "Email already exists",
+          409
+        );
+      }
+
+      employee.email = newEmail;
     }
-
-    employee.email = email.toLowerCase();
   }
 
   // Update Name
@@ -191,20 +290,14 @@ const updateEmployee = async (employeeData) => {
     employee.phone = phone.trim() || "-";
   }
 
-  // Update Designation / Role
+  // Update Designation
   if (designation !== undefined) {
     employee.designation = designation.trim();
   }
 
   // Update Team
   if (team !== undefined) {
-    if (typeof team !== "string" || !team.trim()) {
-      const error = new Error("Team Name is required");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    employee.team = team.trim();
+    employee.team = await resolveTeamId(team);
   }
 
   // Update User Type
@@ -218,40 +311,42 @@ const updateEmployee = async (employeeData) => {
   }
 
   // Update Password
-  if (password && password.trim()) {
-    employee.password = await bcrypt.hash(password, 10);
+  if (
+    typeof password === "string" &&
+    password.trim()
+  ) {
+    employee.password = await bcrypt.hash(
+      password,
+      10
+    );
   }
 
   // Save employee
   await employee.save();
 
-  console.log("SAVED TEAM AFTER UPDATE:", employee.team);
-
-  // Fetch saved employee without password
-  const updatedEmployee = await Employee.findById(_id)
+  // Return updated employee
+  return Employee.findById(_id)
     .select("-password")
+    .populate("team", "name")
     .lean();
-
-  console.log("TEAM AFTER FETCHING:", updatedEmployee?.team);
-  console.log("UPDATED EMPLOYEE:", updatedEmployee);
-
-  return updatedEmployee;
 };
 
 // DELETE EMPLOYEE
 const deleteEmployee = async (_id) => {
-  if (!mongoose.Types.ObjectId.isValid(_id)) {
-    const error = new Error("Invalid employee ID");
-    error.statusCode = 400;
-    throw error;
+  if (!mongoose.isObjectIdOrHexString(_id)) {
+    throw makeError(
+      "Invalid employee ID",
+      400
+    );
   }
 
   const employee = await Employee.findById(_id);
 
   if (!employee) {
-    const error = new Error("Employee not found");
-    error.statusCode = 404;
-    throw error;
+    throw makeError(
+      "Employee not found",
+      404
+    );
   }
 
   await Employee.findByIdAndDelete(_id);

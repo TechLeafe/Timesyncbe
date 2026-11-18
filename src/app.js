@@ -9,7 +9,10 @@ const attendanceRoutes = require("./modules/attendance/attendance.routes");
 const holidayRoutes = require("./modules/holidays/holiday.routes");
 const dashboardRoutes = require("./modules/dashboard/dashboard.routes");
 const dailyTaskRouter = require("./modules/dailyTasks/dailyTask.router");
-const birthdayCreationRoutes = require("./modules/birthdayCreation/birthdayCreation.routes");
+const supportRoutes = require("./modules/support/support.routes");
+const birthdayCreationRoutes = require(
+  "./modules/birthdayCreation/birthdayCreation.routes"
+);
 
 const monthlyAchievementRoutes = require(
   "./modules/monthlyAchievement/monthlyAchievement.routes"
@@ -54,6 +57,8 @@ app.use("/api/holidays", holidayRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/daily-inspiration", dailyInspirationRoutes);
 app.use("/api/daily-tasks", dailyTaskRouter);
+app.use("/api/support", supportRoutes);
+// Birthday Creation routes
 app.use("/api/birthday-creation", birthdayCreationRoutes);
 
 app.use(
