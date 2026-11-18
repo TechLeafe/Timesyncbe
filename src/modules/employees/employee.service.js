@@ -100,7 +100,6 @@ const createEmployee = async (employeeData) => {
 const getAllEmployees = async () => {
   return await Employee.find()
     .select("-password -photo")
-    .populate("team", "name")
     .sort({ createdAt: -1 });
 };
 
@@ -108,9 +107,7 @@ const getAllEmployees = async () => {
 const getEmployeeByUserId = async (user_id) => {
   const employee = await Employee.findOne({
     user_id: user_id.trim(),
-  })
-    .select("-password")
-    .populate("team", "name");
+  }).select("-password");
 
   if (!employee) {
     const error = new Error("Employee not found");

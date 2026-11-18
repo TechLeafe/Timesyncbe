@@ -1,5 +1,4 @@
 const mongoose = require("mongoose");
-require("../teams/team.model");
 
 const employeeSchema = new mongoose.Schema(
   {
@@ -53,18 +52,11 @@ const employeeSchema = new mongoose.Schema(
       trim: true,
     },
 
-    team: {
-      type: String,
-      required: true,
-      trim: true,
+   team: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Team",
+    default: null,
     },
-
-    team: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Team",
-      default: null,
-    },
-
     userType: {
       type: Number,
       required: true,
