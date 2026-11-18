@@ -1,3 +1,4 @@
+
 const validateEmployee = (data, isCreate = true) => {
   const errors = {};
 
@@ -12,59 +13,61 @@ const validateEmployee = (data, isCreate = true) => {
     userType,
   } = data;
 
-  // _id
+  // MongoDB Employee ID required for update
   if (!isCreate) {
-    if (!_id || !_id.trim()) {
+    if (typeof _id !== "string" || !_id.trim()) {
       errors._id = "Employee ID (_id) is required";
     }
   }
 
   // Employee ID
-  if (!employeeId || !employeeId.trim()) {
+  if (typeof employeeId !== "string" || !employeeId.trim()) {
     errors.employeeId = "Employee ID is required";
   }
 
   // Name
-  if (!name || !name.trim()) {
+  if (typeof name !== "string" || !name.trim()) {
     errors.name = "Name is required";
   }
 
   // Email
-  if (!email || !email.trim()) {
+  if (typeof email !== "string" || !email.trim()) {
     errors.email = "Email is required";
   } else {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.com$/;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.com$/i;
 
-    if (!emailRegex.test(email)) {
+    if (!emailRegex.test(email.trim())) {
       errors.email = "Please enter a valid .com email address";
     }
   }
 
   // Password
   if (isCreate) {
-    // Password required when creating employee
-    if (!password || !password.trim()) {
+    if (typeof password !== "string" || !password.trim()) {
       errors.password = "Password is required";
     } else if (!/^\d{6}$/.test(password)) {
       errors.password = "Password must contain exactly 6 digits";
     }
-  } else {
-    // Password optional when updating employee
-    if (password && password.trim()) {
-      if (!/^\d{6}$/.test(password)) {
-        errors.password = "Password must contain exactly 6 digits";
-      }
+  } else if (password !== undefined && password !== "") {
+    if (
+      typeof password !== "string" ||
+      !/^\d{6}$/.test(password)
+    ) {
+      errors.password = "Password must contain exactly 6 digits";
     }
   }
 
   // Designation
-  if (!designation || !designation.trim()) {
+  if (
+    typeof designation !== "string" ||
+    !designation.trim()
+  ) {
     errors.designation = "Designation is required";
   }
 
-  // Team
+  // Team Name or ObjectId
   if (typeof team !== "string" || !team.trim()) {
-    errors.team = "Team Name is required";
+    errors.team = "Team Name or Team ID is required";
   }
 
   // User Type

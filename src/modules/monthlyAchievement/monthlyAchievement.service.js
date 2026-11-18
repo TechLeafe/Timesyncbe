@@ -4,6 +4,7 @@ const MonthlyAchievement = require("./monthlyAchievement.model");
 
 const employeeFields =
   "user_id employeeId name designation status photo";
+
 const MAX_EMPLOYEE_PHOTO_BYTES = 10 * 1024 * 1024;
 
 const makeError = (message, status) => {
@@ -21,12 +22,14 @@ const validatePhoto = (value) => {
 
   const match =
     /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+
   if (!match) {
     throw makeError("Upload a PNG, JPG, or WebP image", 400);
   }
 
   const [, imageType, encodedImage] = match;
   const image = Buffer.from(encodedImage, "base64");
+
   if (
     image.length === 0 ||
     image.length > MAX_EMPLOYEE_PHOTO_BYTES ||
@@ -40,12 +43,14 @@ const validatePhoto = (value) => {
     image.subarray(0, 8).equals(
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
     );
+
   const isJpeg =
     imageType === "jpeg" &&
     image.length >= 3 &&
     image[0] === 0xff &&
     image[1] === 0xd8 &&
     image[2] === 0xff;
+
   const isWebp =
     imageType === "webp" &&
     image.length >= 12 &&
@@ -82,6 +87,7 @@ const saveAchievement = async (body, selectedBy) => {
     body.month,
     body.year
   );
+
   const photo = validatePhoto(body.photo);
 
   if (
@@ -104,9 +110,20 @@ const saveAchievement = async (body, selectedBy) => {
     throw makeError("Active employee not found", 404);
   }
 
+  // Update only the employee photo.
+  // Avoid employee.save(), which validates the invalid team field.
   if (photo !== undefined) {
-    employee.photo = photo;
-    await employee.save();
+    await Employee.updateOne(
+      { _id: employee._id },
+      {
+        $set: {
+          photo,
+        },
+      },
+      {
+        runValidators: true,
+      }
+    );
   }
 
   return MonthlyAchievement.findOneAndUpdate(

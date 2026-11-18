@@ -3,7 +3,6 @@ const Leave = require("../leaves/leave.model");
 const Employee = require("../employees/employee.model");
 const PermissionUsage = require("./permissionUsage.model");
 const attendanceService = require("../attendance/attendance.service");
-
 const POLICY_LIMIT_KEY_MAP = {
   CL: "casualLeave",
   SL: "sickLeave",
@@ -24,7 +23,6 @@ const calculateHours = (fromTime, toTime) => {
   const [toHour, toMinute] = toTime.split(":").map(Number);
   return (toHour * 60 + toMinute - (fromHour * 60 + fromMinute)) / 60;
 };
-
 const getPermissionDurationMinutes = (fromTime, toTime) => {
   const [fromHour, fromMinute] = fromTime.split(":").map(Number);
   const [toHour, toMinute] = toTime.split(":").map(Number);
@@ -191,10 +189,11 @@ const applyLeave = async (user_id, leaveData) => {
     });
 
     const usedDays = approvedLeaves.reduce(
-      (total, l) => total + (l.totalDays || 0),
+      (total, leave) => total + (Number(leave.totalDays) || 0),
       0
     );
-    const allowedDays = leavePolicy[POLICY_LIMIT_KEY_MAP[leaveType]] || 0;
+    const allowedDays =
+      leavePolicy[POLICY_LIMIT_KEY_MAP[leaveType]] || 0;
 
     if (usedDays + totalDays > allowedDays) {
       const error = new Error(
@@ -432,39 +431,39 @@ const reviewLeave = async (
   );
 
   if (status === "Approved" && !isPermission) {
-      const leavePolicy = await Leave.findOne({
-        businessYear: leaveRequest.businessYear,
-      });
-      if (!leavePolicy) {
-        const error = new Error(
-          `Leave policy not found for business year ${leaveRequest.businessYear}`
-        );
-        error.statusCode = 400;
-        throw error;
-      }
-
-      const approvedLeaves = await LeaveApply.find({
-        user_id: leaveRequest.user_id,
-        businessYear: leaveRequest.businessYear,
-        leaveType: leaveRequest.leaveType,
-        status: "Approved",
-        _id: { $ne: leaveId },
-      });
-
-      const usedDays = approvedLeaves.reduce(
-        (total, l) => total + (l.totalDays || 0),
-        0
+    const leavePolicy = await Leave.findOne({
+      businessYear: leaveRequest.businessYear,
+    });
+    if (!leavePolicy) {
+      const error = new Error(
+        `Leave policy not found for business year ${leaveRequest.businessYear}`
       );
-      const allowedDays =
-        leavePolicy[POLICY_LIMIT_KEY_MAP[leaveRequest.leaveType]] || 0;
+      error.statusCode = 400;
+      throw error;
+    }
 
-      if (usedDays + leaveRequest.totalDays > allowedDays) {
-        const error = new Error(
-          `Cannot approve. Total used (${usedDays + leaveRequest.totalDays}) exceeds allowed limit (${allowedDays}).`
-        );
-        error.statusCode = 400;
-        throw error;
-      }
+    const approvedLeaves = await LeaveApply.find({
+      user_id: leaveRequest.user_id,
+      businessYear: leaveRequest.businessYear,
+      leaveType: leaveRequest.leaveType,
+      status: "Approved",
+      _id: { $ne: leaveId },
+    });
+
+    const usedDays = approvedLeaves.reduce(
+      (total, leave) => total + (Number(leave.totalDays) || 0),
+      0
+    );
+    const allowedDays =
+      leavePolicy[POLICY_LIMIT_KEY_MAP[leaveRequest.leaveType]] || 0;
+
+    if (usedDays + leaveRequest.totalDays > allowedDays) {
+      const error = new Error(
+        `Cannot approve. Total used (${usedDays + leaveRequest.totalDays}) exceeds allowed limit (${allowedDays}).`
+      );
+      error.statusCode = 400;
+      throw error;
+    }
   }
 
   let permissionReservation = 0;
