@@ -1,6 +1,8 @@
+
 const express = require("express");
 
 const authMiddleware = require("../../middleware/auth.middleware");
+const desktopOnly = require("../../middleware/desktopOnly.middleware");
 
 const {
   checkIn,
@@ -17,9 +19,14 @@ const {
 
 const router = express.Router();
 
-// JWT authentication
+// ========================================
+// JWT Authentication - All Routes
+// ========================================
 router.use(authMiddleware);
 
+// ========================================
+// Admin / HR Authorization
+// ========================================
 const authorizeAdminHR = (req, res, next) => {
   if ([1, 2].includes(Number(req.user.userType))) {
     return next();
@@ -31,33 +38,87 @@ const authorizeAdminHR = (req, res, next) => {
   });
 };
 
+// ========================================
+// Export Attendance - Admin / HR
+// ========================================
 router.get(
   "/export",
   authorizeAdminHR,
   exportAttendance
 );
 
-// Check-in
-router.post("/check-in", checkIn);
+// ========================================
+// Check In - Desktop / Laptop Only
+// ========================================
+router.post(
+  "/check-in",
+  desktopOnly,
+  checkIn
+);
 
-// Check-out
-router.post("/check-out", checkOut);
+// ========================================
+// Check Out - Desktop / Laptop Only
+// ========================================
+router.post(
+  "/check-out",
+  desktopOnly,
+  checkOut
+);
 
-// Cron health/status (Admin / HR only)
-router.get("/cron-status", getAttendanceCronStatus);
+// ========================================
+// Cron Health / Status
+// ========================================
+router.get(
+  "/cron-status",
+  getAttendanceCronStatus
+);
 
-// Daily attendance
-router.post("/daily", getDailyAttendance);
+// ========================================
+// Daily Attendance
+// ========================================
+router.post(
+  "/daily",
+  getDailyAttendance
+);
 
-// Attendance history
-router.post("/history", getAttendanceHistory);
+// ========================================
+// Attendance History
+// ========================================
+router.post(
+  "/history",
+  getAttendanceHistory
+);
 
-// Particular employee attendance
-router.post("/employee", getEmployeeAttendance);
+// ========================================
+// Particular Employee Attendance
+// ========================================
+router.post(
+  "/employee",
+  getEmployeeAttendance
+);
 
-// Previous-day attendance approval queue (Admin / HR only)
-router.post("/approvals", getAttendanceApprovals);
-router.post("/review", reviewAttendance);
-router.post("/correct", correctAttendanceStatus);
+// ========================================
+// Attendance Approvals
+// ========================================
+router.post(
+  "/approvals",
+  getAttendanceApprovals
+);
+
+// ========================================
+// Review Attendance
+// ========================================
+router.post(
+  "/review",
+  reviewAttendance
+);
+
+// ========================================
+// Correct Attendance Status
+// ========================================
+router.post(
+  "/correct",
+  correctAttendanceStatus
+);
 
 module.exports = router;
