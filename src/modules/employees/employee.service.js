@@ -58,6 +58,37 @@ const resolveTeamId = async (teamValue) => {
   return team._id;
 };
 
+const addTeamNames = async (employees) => {
+  const teamIds = [
+    ...new Set(
+      employees
+        .map((employee) => employee.team)
+        .filter((team) =>
+          mongoose.isObjectIdOrHexString(team)
+        )
+        .map(String)
+    ),
+  ];
+
+  const teams = teamIds.length
+    ? await Team.find({ _id: { $in: teamIds } })
+        .select("name")
+        .lean()
+    : [];
+  const teamNames = new Map(
+    teams.map((team) => [String(team._id), team.name])
+  );
+
+  return employees.map((employee) => {
+    const teamValue = employee.team;
+    const team = mongoose.isObjectIdOrHexString(teamValue)
+      ? teamNames.get(String(teamValue)) || "-"
+      : teamValue || "-";
+
+    return { ...employee, team };
+  });
+};
+
 // GENERATE UNIQUE USER ID
 const generateUserId = async () => {
   const lastEmployee = await Employee.findOne()
@@ -161,17 +192,10 @@ const createEmployee = async (employeeData) => {
 const getAllEmployees = async () => {
   const employees = await Employee.find()
     .select("-password -photo")
-    .populate("team", "name")
     .sort({ createdAt: -1 })
     .lean();
 
-  return employees.map((employee) => ({
-    ...employee,
-    team:
-      employee.team && typeof employee.team === "object"
-        ? employee.team.name
-        : employee.team || "-",
-  }));
+  return addTeamNames(employees);
 };
 
 // GET SINGLE EMPLOYEE
@@ -180,7 +204,6 @@ const getEmployeeByUserId = async (user_id) => {
     user_id: user_id.trim(),
   })
     .select("-password")
-    .populate("team", "name")
     .lean();
 
   if (!employee) {
@@ -190,13 +213,8 @@ const getEmployeeByUserId = async (user_id) => {
     );
   }
 
-  return {
-    ...employee,
-    team:
-      employee.team && typeof employee.team === "object"
-        ? employee.team.name
-        : employee.team || "-",
-  };
+  const [employeeWithTeamName] = await addTeamNames([employee]);
+  return employeeWithTeamName;
 };
 
 // UPDATE EMPLOYEE
@@ -317,10 +335,18 @@ const updateEmployee = async (employeeData) => {
   await employee.save();
 
   // Return updated employee
-  return Employee.findById(_id)
+  const updatedEmployee = await Employee.findById(_id)
     .select("-password")
-    .populate("team", "name")
     .lean();
+
+  if (!updatedEmployee) {
+    return null;
+  }
+
+  const [employeeWithTeamName] = await addTeamNames([
+    updatedEmployee,
+  ]);
+  return employeeWithTeamName;
 };
 
 // DELETE EMPLOYEE
