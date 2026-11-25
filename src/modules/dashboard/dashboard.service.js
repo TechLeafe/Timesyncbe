@@ -1,19 +1,58 @@
 const Employee = require("../employees/employee.model");
 require("../teams/team.model");
+
 const Attendance = require("../attendance/attendance.model");
 const Leave = require("../leaves/leave.model");
 const LeaveApply = require("../leaveApply/leaveApply.model");
-const { getCompOffEarnedDates } = require("../leaveApply/leaveApply.service");
 const Holiday = require("../holidays/holiday.model");
 
-const getToday = () => {
-  const now = new Date();
+// ==================================================
+// HELPER FUNCTIONS
+// ==================================================
 
-  return new Intl.DateTimeFormat("en-CA", {
+const getToday = () => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
-  }).format(now);
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = parts.find((part) => part.type === "year").value;
+  const month = parts.find((part) => part.type === "month").value;
+  const day = parts.find((part) => part.type === "day").value;
+
+  return `${year}-${month}-${day}`;
 };
 
+// Validate selected date
+const getSelectedDate = (date) => {
+  const selectedDate = date || getToday();
+
+  if (
+    typeof selectedDate !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)
+  ) {
+    const error = new Error("Invalid date format. Use YYYY-MM-DD");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const parsedDate = new Date(`${selectedDate}T00:00:00Z`);
+
+  if (
+    Number.isNaN(parsedDate.getTime()) ||
+    parsedDate.toISOString().slice(0, 10) !== selectedDate
+  ) {
+    const error = new Error("Invalid selected date");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return selectedDate;
+};
+
+// Calculate business year
 const getBusinessYear = (date) => {
   const [year, month] = date.split("-").map(Number);
 
@@ -22,14 +61,22 @@ const getBusinessYear = (date) => {
     : `${year - 1}-${year}`;
 };
 
-const getWorkingHours = (seconds) => {
-  if (!seconds || seconds < 0) {
-    return "00:00:00";
-  }
+// Safe number conversion
+const safeNumber = (value) => {
+  const number = Number(value);
 
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainingSeconds = seconds % 60;
+  return Number.isFinite(number)
+    ? Math.max(0, number)
+    : 0;
+};
+
+// Convert seconds into HH:mm:ss
+const getWorkingHours = (seconds) => {
+  const totalSeconds = Math.floor(safeNumber(seconds));
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainingSeconds = totalSeconds % 60;
 
   return [
     String(hours).padStart(2, "0"),
@@ -38,8 +85,83 @@ const getWorkingHours = (seconds) => {
   ].join(":");
 };
 
+// Safe date conversion
+const getDateKey = (value) => {
+  if (!value) return null;
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString().slice(0, 10);
+};
+
+// Get active attendance session
+const getActiveCheckInTime = (attendance) => {
+  if (!attendance) return null;
+
+  const sessions = Array.isArray(attendance.sessions)
+    ? attendance.sessions
+    : [];
+
+  const activeSession = sessions.find(
+    (session) =>
+      session &&
+      session.checkInTime &&
+      !session.checkOutTime
+  );
+
+  return (
+    activeSession?.checkInTime ||
+    (!attendance.checkOutTime
+      ? attendance.checkInTime
+      : null) ||
+    null
+  );
+};
+
+// Calculate current working seconds
+const getCurrentWorkingSeconds = (attendance) => {
+  if (!attendance) return 0;
+
+  let workingSeconds = safeNumber(
+    attendance.totalWorkingSeconds
+  );
+
+  const activeCheckInTime =
+    getActiveCheckInTime(attendance);
+
+  if (
+    activeCheckInTime &&
+    !attendance.checkOutTime
+  ) {
+    const checkInTimestamp = new Date(
+      activeCheckInTime
+    ).getTime();
+
+    if (Number.isFinite(checkInTimestamp)) {
+      const elapsedSeconds = Math.max(
+        0,
+        Math.floor(
+          (Date.now() - checkInTimestamp) / 1000
+        )
+      );
+
+      workingSeconds += elapsedSeconds;
+    }
+  }
+
+  return Math.floor(workingSeconds);
+};
+
+// ==================================================
+// ADMIN & HR DASHBOARD
+// ==================================================
+
 const getAdminDashboard = async (date) => {
-  const selectedDate = date || getToday();
+  const selectedDate = getSelectedDate(date);
   const businessYear = getBusinessYear(selectedDate);
 
   // --------------------------------------------------
@@ -76,7 +198,9 @@ const getAdminDashboard = async (date) => {
   const presentToday = todayAttendance.length;
 
   const checkedIn = todayAttendance.filter(
-    (attendance) => attendance.checkInTime && !attendance.checkOutTime
+    (attendance) =>
+      attendance.checkInTime &&
+      !attendance.checkOutTime
   ).length;
 
   const checkedOut = todayAttendance.filter(
@@ -90,33 +214,20 @@ const getAdminDashboard = async (date) => {
     0
   );
 
-  // Add readable working hours
-  const formattedAttendance = todayAttendance.map((attendance) => {
-    let workingSeconds = attendance.totalWorkingSeconds;
-    const activeSession = (attendance.sessions || []).find(
-      (session) => !session.checkOutTime
-    );
-    const activeCheckInTime =
-      activeSession?.checkInTime ||
-      (!attendance.checkOutTime ? attendance.checkInTime : null);
+  // Format attendance working hours
+  const formattedAttendance = todayAttendance.map(
+    (attendance) => {
+      const workingSeconds =
+        getCurrentWorkingSeconds(attendance);
 
-    // If employee is still working, calculate current elapsed time
-    if (
-      activeCheckInTime &&
-      !attendance.checkOutTime
-    ) {
-      workingSeconds = Math.floor(
-        (attendance.totalWorkingSeconds || 0) +
-          (Date.now() - new Date(activeCheckInTime).getTime()) /
-            1000
-      );
+      return {
+        ...attendance,
+        workingHours: getWorkingHours(
+          workingSeconds
+        ),
+      };
     }
-
-    return {
-      ...attendance,
-      workingHours: getWorkingHours(workingSeconds),
-    };
-  });
+  );
 
   // --------------------------------------------------
   // LEAVE STATISTICS
@@ -140,37 +251,56 @@ const getAdminDashboard = async (date) => {
     }),
   ]);
 
-  const leaveTypeCounts = {
-    CL: await LeaveApply.countDocuments({
+  // --------------------------------------------------
+  // LEAVE TYPE COUNTS
+  // --------------------------------------------------
+
+  const [
+    casualLeaveCount,
+    sickLeaveCount,
+    compOffCount,
+    permissionCount,
+  ] = await Promise.all([
+    LeaveApply.countDocuments({
       leaveType: "CL",
       status: "Approved",
     }),
 
-    SL: await LeaveApply.countDocuments({
+    LeaveApply.countDocuments({
       leaveType: "SL",
       status: "Approved",
     }),
 
-    COMP_OFF: await LeaveApply.countDocuments({
+    LeaveApply.countDocuments({
       leaveType: "COMP_OFF",
       status: "Approved",
     }),
 
-    PERMISSION: await LeaveApply.countDocuments({
-      leaveType: "PERMISSION",
+    LeaveApply.countDocuments({
+      leaveType: {
+        $in: ["PERMISSION", "Permission"],
+      },
       status: "Approved",
     }),
+  ]);
+
+  const leaveTypeCounts = {
+    CL: casualLeaveCount,
+    SL: sickLeaveCount,
+    COMP_OFF: compOffCount,
+    PERMISSION: permissionCount,
   };
 
   // --------------------------------------------------
   // RECENT LEAVE REQUESTS
   // --------------------------------------------------
 
-  const recentLeaveRequests = await LeaveApply.find({})
-    .sort({ createdAt: -1 })
-    .limit(10)
-    .select("-__v")
-    .lean();
+  const recentLeaveRequests =
+    await LeaveApply.find({})
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .select("-__v")
+      .lean();
 
   // --------------------------------------------------
   // HOLIDAYS
@@ -185,7 +315,7 @@ const getAdminDashboard = async (date) => {
     .lean();
 
   // --------------------------------------------------
-  // RESPONSE
+  // ADMIN DASHBOARD RESPONSE
   // --------------------------------------------------
 
   return {
@@ -220,12 +350,30 @@ const getAdminDashboard = async (date) => {
   };
 };
 
+// ==================================================
+// EMPLOYEE DASHBOARD
+// ==================================================
+
 const getEmployeeDashboard = async (userId, date) => {
-  const selectedDate = date || getToday();
+  const selectedDate = getSelectedDate(date);
   const businessYear = getBusinessYear(selectedDate);
 
   // --------------------------------------------------
-  // EMPLOYEE
+  // VALIDATE EMPLOYEE ID
+  // --------------------------------------------------
+
+  if (
+    userId === undefined ||
+    userId === null ||
+    userId === ""
+  ) {
+    const error = new Error("Employee user ID is required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  // --------------------------------------------------
+  // EMPLOYEE DETAILS
   // --------------------------------------------------
 
   const employee = await Employee.findOne({
@@ -255,6 +403,7 @@ const getEmployeeDashboard = async (userId, date) => {
   let todayAttendance = {
     checkInTime: null,
     checkOutTime: null,
+    activeCheckInTime: null,
     isCheckedIn: false,
     isCheckedOut: false,
     totalWorkingSeconds: 0,
@@ -264,40 +413,49 @@ const getEmployeeDashboard = async (userId, date) => {
   };
 
   if (attendance) {
-    let workingSeconds = attendance.totalWorkingSeconds || 0;
-    const activeSession = (attendance.sessions || []).find(
-      (session) => !session.checkOutTime
-    );
-    const activeCheckInTime =
-      activeSession?.checkInTime ||
-      (!attendance.checkOutTime ? attendance.checkInTime : null);
+    const workingSeconds =
+      getCurrentWorkingSeconds(attendance);
 
-    if (
-      activeCheckInTime &&
+    const activeCheckInTime =
+      getActiveCheckInTime(attendance);
+
+    const isCheckedIn = Boolean(
+      attendance.checkInTime &&
       !attendance.checkOutTime
-    ) {
-      workingSeconds = Math.floor(
-        (attendance.totalWorkingSeconds || 0) +
-          (Date.now() - new Date(activeCheckInTime).getTime()) /
-            1000
-      );
-    }
+    );
+
+    const isCheckedOut = Boolean(
+      attendance.checkOutTime
+    );
 
     todayAttendance = {
-      checkInTime: attendance.checkInTime,
-      checkOutTime: attendance.checkOutTime,
-      isCheckedIn: Boolean(
-        attendance.checkInTime && !attendance.checkOutTime
-      ),
-      isCheckedOut: Boolean(attendance.checkOutTime),
+      checkInTime:
+        attendance.checkInTime || null,
+
+      checkOutTime:
+        attendance.checkOutTime || null,
+
       activeCheckInTime,
-      totalWorkingSeconds:
-        attendance.totalWorkingSeconds || 0,
+
+      isCheckedIn,
+
+      isCheckedOut,
+
+      totalWorkingSeconds: safeNumber(
+        attendance.totalWorkingSeconds
+      ),
+
       currentWorkingSeconds: workingSeconds,
-      workingHours: getWorkingHours(workingSeconds),
-      status: attendance.checkOutTime
+
+      workingHours: getWorkingHours(
+        workingSeconds
+      ),
+
+      status: isCheckedOut
         ? "Checked Out"
-        : "Checked In",
+        : isCheckedIn
+        ? "Checked In"
+        : "Not Checked In",
     };
   }
 
@@ -320,17 +478,20 @@ const getEmployeeDashboard = async (userId, date) => {
     businessYear,
     status: "Approved",
   })
-    .select("leaveType totalDays totalHours fromDate")
+    .select(
+      "leaveType totalDays totalHours fromDate"
+    )
     .lean();
 
   let usedCL = 0;
   let usedSL = 0;
   let usedCompOff = 0;
-  const selectedMonth = selectedDate.slice(0, 7);
   let usedPermissions = 0;
 
+  const selectedMonth = selectedDate.slice(0, 7);
+
   approvedLeaves.forEach((leave) => {
-    const days = Number(leave.totalDays || 0);
+    const days = safeNumber(leave.totalDays);
 
     switch (leave.leaveType) {
       case "CL":
@@ -346,37 +507,49 @@ const getEmployeeDashboard = async (userId, date) => {
         break;
 
       case "PERMISSION":
-      case "Permission":
+      case "Permission": {
+        const leaveDate = getDateKey(
+          leave.fromDate
+        );
+
         if (
-          leave.fromDate &&
-          new Date(leave.fromDate).toISOString().slice(0, 7) ===
-            selectedMonth
+          leaveDate &&
+          leaveDate.slice(0, 7) === selectedMonth
         ) {
-          usedPermissions += Number(leave.totalHours) || 0;
+          usedPermissions += safeNumber(
+            leave.totalHours
+          );
         }
+
         break;
+      }
 
       default:
         break;
     }
   });
 
-  const casualAllocated = leavePolicy
-    ? leavePolicy.casualLeave
-    : 0;
+  // --------------------------------------------------
+  // LEAVE ALLOCATION
+  // --------------------------------------------------
 
-  const sickAllocated = leavePolicy
-    ? leavePolicy.sickLeave
-    : 0;
-
-  const earnedCompOffDates = await getCompOffEarnedDates(
-    userId,
-    businessYear
+  const casualAllocated = safeNumber(
+    leavePolicy?.casualLeave
   );
-  const compOffAllocated =
-    (leavePolicy ? Number(leavePolicy.compensatoryOff) || 0 : 0) +
-    earnedCompOffDates.length;
 
+  const sickAllocated = safeNumber(
+    leavePolicy?.sickLeave
+  );
+
+  // FIX:
+  // Removed getCompOffEarnedDates dependency.
+  // Use compensatory off from leave policy.
+
+  const compOffAllocated = safeNumber(
+    leavePolicy?.compensatoryOff
+  );
+
+  // Monthly permission allowance: 4 hours
   const permissionAllocated = 4;
 
   // --------------------------------------------------
@@ -418,22 +591,17 @@ const getEmployeeDashboard = async (userId, date) => {
 
   const formattedAttendanceHistory =
     attendanceHistory.map((item) => {
-      let workingSeconds = item.totalWorkingSeconds || 0;
-
-      if (
-        item.checkInTime &&
-        !item.checkOutTime
-      ) {
-        workingSeconds = Math.floor(
-          (Date.now() -
-            new Date(item.checkInTime).getTime()) /
-            1000
-        );
-      }
+      const workingSeconds =
+        item.day === getToday()
+          ? getCurrentWorkingSeconds(item)
+          : safeNumber(item.totalWorkingSeconds);
 
       return {
         ...item,
-        workingHours: getWorkingHours(workingSeconds),
+
+        workingHours: getWorkingHours(
+          workingSeconds
+        ),
       };
     });
 
@@ -462,7 +630,7 @@ const getEmployeeDashboard = async (userId, date) => {
     .lean();
 
   // --------------------------------------------------
-  // RESPONSE
+  // EMPLOYEE DASHBOARD RESPONSE
   // --------------------------------------------------
 
   return {
@@ -472,9 +640,13 @@ const getEmployeeDashboard = async (userId, date) => {
       name: employee.name,
       email: employee.email,
       designation: employee.designation,
+
       team:
         employee.team?.name ||
-        (typeof employee.team === "string" ? employee.team : ""),
+        (typeof employee.team === "string"
+          ? employee.team
+          : ""),
+
       status: employee.status,
     },
 
@@ -486,6 +658,7 @@ const getEmployeeDashboard = async (userId, date) => {
       casualLeave: {
         allocated: casualAllocated,
         used: usedCL,
+
         available: Math.max(
           casualAllocated - usedCL,
           0
@@ -495,6 +668,7 @@ const getEmployeeDashboard = async (userId, date) => {
       sickLeave: {
         allocated: sickAllocated,
         used: usedSL,
+
         available: Math.max(
           sickAllocated - usedSL,
           0
@@ -504,6 +678,7 @@ const getEmployeeDashboard = async (userId, date) => {
       compensatoryOff: {
         allocated: compOffAllocated,
         used: usedCompOff,
+
         available: Math.max(
           compOffAllocated - usedCompOff,
           0
@@ -513,6 +688,7 @@ const getEmployeeDashboard = async (userId, date) => {
       permissions: {
         allocated: permissionAllocated,
         used: usedPermissions,
+
         available: Math.max(
           permissionAllocated - usedPermissions,
           0
@@ -533,6 +709,10 @@ const getEmployeeDashboard = async (userId, date) => {
     holidays,
   };
 };
+
+// ==================================================
+// EXPORTS
+// ==================================================
 
 module.exports = {
   getAdminDashboard,
