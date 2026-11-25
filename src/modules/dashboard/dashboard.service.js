@@ -1,10 +1,13 @@
 const Employee = require("../employees/employee.model");
-require("../teams/team.model");
-
+const Team = require("../teams/team.model");
 const Attendance = require("../attendance/attendance.model");
 const Leave = require("../leaves/leave.model");
 const LeaveApply = require("../leaveApply/leaveApply.model");
 const Holiday = require("../holidays/holiday.model");
+
+const {
+  getCompOffEarnedDates,
+} = require("../leaveApply/leaveApply.service");
 
 // ==================================================
 // HELPER FUNCTIONS
@@ -18,14 +21,25 @@ const getToday = () => {
     day: "2-digit",
   }).formatToParts(new Date());
 
-  const year = parts.find((part) => part.type === "year").value;
-  const month = parts.find((part) => part.type === "month").value;
-  const day = parts.find((part) => part.type === "day").value;
+  const year = parts.find(
+    (part) => part.type === "year"
+  ).value;
+
+  const month = parts.find(
+    (part) => part.type === "month"
+  ).value;
+
+  const day = parts.find(
+    (part) => part.type === "day"
+  ).value;
 
   return `${year}-${month}-${day}`;
 };
 
-// Validate selected date
+// ==================================================
+// VALIDATE DATE
+// ==================================================
+
 const getSelectedDate = (date) => {
   const selectedDate = date || getToday();
 
@@ -33,18 +47,24 @@ const getSelectedDate = (date) => {
     typeof selectedDate !== "string" ||
     !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)
   ) {
-    const error = new Error("Invalid date format. Use YYYY-MM-DD");
+    const error = new Error(
+      "Invalid date format. Use YYYY-MM-DD"
+    );
+
     error.statusCode = 400;
     throw error;
   }
 
-  const parsedDate = new Date(`${selectedDate}T00:00:00Z`);
+  const parsedDate = new Date(
+    `${selectedDate}T00:00:00Z`
+  );
 
   if (
     Number.isNaN(parsedDate.getTime()) ||
     parsedDate.toISOString().slice(0, 10) !== selectedDate
   ) {
     const error = new Error("Invalid selected date");
+
     error.statusCode = 400;
     throw error;
   }
@@ -52,7 +72,10 @@ const getSelectedDate = (date) => {
   return selectedDate;
 };
 
-// Calculate business year
+// ==================================================
+// BUSINESS YEAR
+// ==================================================
+
 const getBusinessYear = (date) => {
   const [year, month] = date.split("-").map(Number);
 
@@ -61,7 +84,10 @@ const getBusinessYear = (date) => {
     : `${year - 1}-${year}`;
 };
 
-// Safe number conversion
+// ==================================================
+// SAFE NUMBER
+// ==================================================
+
 const safeNumber = (value) => {
   const number = Number(value);
 
@@ -70,12 +96,21 @@ const safeNumber = (value) => {
     : 0;
 };
 
-// Convert seconds into HH:mm:ss
+// ==================================================
+// WORKING HOURS
+// ==================================================
+
 const getWorkingHours = (seconds) => {
-  const totalSeconds = Math.floor(safeNumber(seconds));
+  const totalSeconds = Math.floor(
+    safeNumber(seconds)
+  );
 
   const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  const minutes = Math.floor(
+    (totalSeconds % 3600) / 60
+  );
+
   const remainingSeconds = totalSeconds % 60;
 
   return [
@@ -85,9 +120,14 @@ const getWorkingHours = (seconds) => {
   ].join(":");
 };
 
-// Safe date conversion
+// ==================================================
+// SAFE DATE CONVERSION
+// ==================================================
+
 const getDateKey = (value) => {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
 
   const date = new Date(value);
 
@@ -98,11 +138,56 @@ const getDateKey = (value) => {
   return date.toISOString().slice(0, 10);
 };
 
-// Get active attendance session
-const getActiveCheckInTime = (attendance) => {
-  if (!attendance) return null;
+// ==================================================
+// SAFE TEAM NAME RESOLUTION
+// FIX: HRMS / COINSTEP OBJECT ID CAST ERROR
+// ==================================================
 
-  const sessions = Array.isArray(attendance.sessions)
+const getEmployeeTeamName = async (teamValue) => {
+  if (!teamValue) {
+    return "";
+  }
+
+  // Already populated team object
+  if (
+    typeof teamValue === "object" &&
+    typeof teamValue.name === "string"
+  ) {
+    return teamValue.name;
+  }
+
+  const value = String(teamValue).trim();
+
+  // Check whether team value is a valid ObjectId
+  const isObjectId = /^[a-fA-F0-9]{24}$/.test(
+    value
+  );
+
+  if (isObjectId) {
+    const team = await Team.findById(value)
+      .select("name")
+      .lean();
+
+    return team?.name || "";
+  }
+
+  // Support old string-based employee team values
+  // Example: HRMS, COINSTEP
+  return value;
+};
+
+// ==================================================
+// ACTIVE ATTENDANCE SESSION
+// ==================================================
+
+const getActiveCheckInTime = (attendance) => {
+  if (!attendance) {
+    return null;
+  }
+
+  const sessions = Array.isArray(
+    attendance.sessions
+  )
     ? attendance.sessions
     : [];
 
@@ -122,9 +207,14 @@ const getActiveCheckInTime = (attendance) => {
   );
 };
 
-// Calculate current working seconds
+// ==================================================
+// CURRENT WORKING SECONDS
+// ==================================================
+
 const getCurrentWorkingSeconds = (attendance) => {
-  if (!attendance) return 0;
+  if (!attendance) {
+    return 0;
+  }
 
   let workingSeconds = safeNumber(
     attendance.totalWorkingSeconds
@@ -135,7 +225,8 @@ const getCurrentWorkingSeconds = (attendance) => {
 
   if (
     activeCheckInTime &&
-    !attendance.checkOutTime
+    !attendance.checkOutTime &&
+    attendance.day === getToday()
   ) {
     const checkInTimestamp = new Date(
       activeCheckInTime
@@ -162,7 +253,9 @@ const getCurrentWorkingSeconds = (attendance) => {
 
 const getAdminDashboard = async (date) => {
   const selectedDate = getSelectedDate(date);
-  const businessYear = getBusinessYear(selectedDate);
+
+  const businessYear =
+    getBusinessYear(selectedDate);
 
   // --------------------------------------------------
   // EMPLOYEE STATISTICS
@@ -214,20 +307,23 @@ const getAdminDashboard = async (date) => {
     0
   );
 
-  // Format attendance working hours
-  const formattedAttendance = todayAttendance.map(
-    (attendance) => {
+  // --------------------------------------------------
+  // FORMAT ATTENDANCE
+  // --------------------------------------------------
+
+  const formattedAttendance =
+    todayAttendance.map((attendance) => {
       const workingSeconds =
         getCurrentWorkingSeconds(attendance);
 
       return {
         ...attendance,
+
         workingHours: getWorkingHours(
           workingSeconds
         ),
       };
-    }
-  );
+    });
 
   // --------------------------------------------------
   // LEAVE STATISTICS
@@ -315,7 +411,7 @@ const getAdminDashboard = async (date) => {
     .lean();
 
   // --------------------------------------------------
-  // ADMIN DASHBOARD RESPONSE
+  // ADMIN & HR DASHBOARD RESPONSE
   // --------------------------------------------------
 
   return {
@@ -354,12 +450,17 @@ const getAdminDashboard = async (date) => {
 // EMPLOYEE DASHBOARD
 // ==================================================
 
-const getEmployeeDashboard = async (userId, date) => {
+const getEmployeeDashboard = async (
+  userId,
+  date
+) => {
   const selectedDate = getSelectedDate(date);
-  const businessYear = getBusinessYear(selectedDate);
+
+  const businessYear =
+    getBusinessYear(selectedDate);
 
   // --------------------------------------------------
-  // VALIDATE EMPLOYEE ID
+  // VALIDATE USER ID
   // --------------------------------------------------
 
   if (
@@ -367,27 +468,38 @@ const getEmployeeDashboard = async (userId, date) => {
     userId === null ||
     userId === ""
   ) {
-    const error = new Error("Employee user ID is required");
+    const error = new Error(
+      "Employee user ID is required"
+    );
+
     error.statusCode = 400;
     throw error;
   }
 
   // --------------------------------------------------
   // EMPLOYEE DETAILS
+  // FIX: REMOVED POPULATE TEAM
   // --------------------------------------------------
 
   const employee = await Employee.findOne({
     user_id: userId,
   })
-    .populate("team", "name")
     .select("-password")
     .lean();
 
   if (!employee) {
-    const error = new Error("Employee not found");
+    const error = new Error(
+      "Employee not found"
+    );
+
     error.statusCode = 404;
     throw error;
   }
+
+  // Safely resolve team name
+  const teamName = await getEmployeeTeamName(
+    employee.team
+  );
 
   // --------------------------------------------------
   // TODAY ATTENDANCE
@@ -541,13 +653,33 @@ const getEmployeeDashboard = async (userId, date) => {
     leavePolicy?.sickLeave
   );
 
-  // FIX:
-  // Removed getCompOffEarnedDates dependency.
-  // Use compensatory off from leave policy.
+  // --------------------------------------------------
+  // COMPENSATORY OFF ALLOCATION
+  // --------------------------------------------------
 
-  const compOffAllocated = safeNumber(
-    leavePolicy?.compensatoryOff
-  );
+  if (
+    typeof getCompOffEarnedDates !== "function"
+  ) {
+    throw new Error(
+      "getCompOffEarnedDates is not exported from leaveApply.service.js"
+    );
+  }
+
+  const earnedCompOffDates =
+    await getCompOffEarnedDates(
+      userId,
+      businessYear
+    );
+
+  if (!Array.isArray(earnedCompOffDates)) {
+    throw new Error(
+      "Invalid earned compensatory off dates"
+    );
+  }
+
+  const compOffAllocated =
+    safeNumber(leavePolicy?.compensatoryOff) +
+    earnedCompOffDates.length;
 
   // Monthly permission allowance: 4 hours
   const permissionAllocated = 4;
@@ -592,9 +724,7 @@ const getEmployeeDashboard = async (userId, date) => {
   const formattedAttendanceHistory =
     attendanceHistory.map((item) => {
       const workingSeconds =
-        item.day === getToday()
-          ? getCurrentWorkingSeconds(item)
-          : safeNumber(item.totalWorkingSeconds);
+        getCurrentWorkingSeconds(item);
 
       return {
         ...item,
@@ -641,11 +771,8 @@ const getEmployeeDashboard = async (userId, date) => {
       email: employee.email,
       designation: employee.designation,
 
-      team:
-        employee.team?.name ||
-        (typeof employee.team === "string"
-          ? employee.team
-          : ""),
+      // FIX: SAFE TEAM NAME
+      team: teamName,
 
       status: employee.status,
     },
@@ -657,6 +784,7 @@ const getEmployeeDashboard = async (userId, date) => {
     leaveBalance: {
       casualLeave: {
         allocated: casualAllocated,
+
         used: usedCL,
 
         available: Math.max(
@@ -667,6 +795,7 @@ const getEmployeeDashboard = async (userId, date) => {
 
       sickLeave: {
         allocated: sickAllocated,
+
         used: usedSL,
 
         available: Math.max(
@@ -677,6 +806,7 @@ const getEmployeeDashboard = async (userId, date) => {
 
       compensatoryOff: {
         allocated: compOffAllocated,
+
         used: usedCompOff,
 
         available: Math.max(
@@ -687,6 +817,7 @@ const getEmployeeDashboard = async (userId, date) => {
 
       permissions: {
         allocated: permissionAllocated,
+
         used: usedPermissions,
 
         available: Math.max(
