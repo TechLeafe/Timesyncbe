@@ -152,7 +152,7 @@ test("approved permission bringing combined time to nine hours yields Present", 
   }
 });
 
-test("permission credits only scheduled missed time and excludes actual work overlap", () => {
+test("approved permission credits the full requested duration even when it overlaps work", () => {
   const attendance = {
     day: "2026-11-02",
     checkInTime: new Date("2026-11-02T10:30:00+05:30"),
@@ -179,7 +179,7 @@ test("permission credits only scheduled missed time and excludes actual work ove
 
   assert.equal(credit.requestedPermissionHours, 2);
   assert.equal(credit.approvedPermissionRequestedHours, 2);
-  assert.equal(credit.approvedPermissionHours, 1.5);
+  assert.equal(credit.approvedPermissionHours, 2);
 });
 
 test("pending or rejected permission is not credited toward attendance", () => {

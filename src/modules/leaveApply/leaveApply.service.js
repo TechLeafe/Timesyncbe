@@ -2,6 +2,8 @@ const LeaveApply = require("./leaveApply.model");
 const Leave = require("../leaves/leave.model");
 const Employee = require("../employees/employee.model");
 const PermissionUsage = require("./permissionUsage.model");
+const Attendance = require("../attendance/attendance.model");
+const Holiday = require("../holidays/holiday.model");
 const attendanceService = require("../attendance/attendance.service");
 const POLICY_LIMIT_KEY_MAP = {
   CL: "casualLeave",
@@ -10,6 +12,77 @@ const POLICY_LIMIT_KEY_MAP = {
   PERMISSION: "permissionsPerMonth",
 };
 const MONTHLY_PERMISSION_LIMIT_HOURS = 4;
+
+const getCompOffEarnedDates = async (user_id, businessYear) => {
+  const [startYear, endYear] = String(businessYear)
+    .split("-")
+    .map(Number);
+  if (!Number.isInteger(startYear) || !Number.isInteger(endYear)) {
+    return [];
+  }
+
+  const startDate = `${startYear}-04-01`;
+  const endDate = `${endYear}-04-01`;
+  const [attendanceDays, holidays] = await Promise.all([
+    Attendance.find({
+      user_id,
+      day: { $gte: startDate, $lt: endDate },
+      $or: [
+        { totalCreditedWorkingSeconds: { $gt: 0 } },
+        { totalWorkingSeconds: { $gt: 0 } },
+        { checkInTime: { $ne: null } },
+      ],
+    })
+      .select("day")
+      .lean(),
+    Holiday.find({
+      holidayDate: { $gte: startDate, $lt: endDate },
+      status: "Active",
+    })
+      .select("holidayDate holidayType")
+      .lean(),
+  ]);
+
+  const holidayTypes = new Map(
+    holidays.map((holiday) => [holiday.holidayDate, holiday.holidayType])
+  );
+
+  return [...new Set(attendanceDays.map(({ day }) => day))].filter((day) => {
+    const holidayType = holidayTypes.get(day);
+    if (holidayType === "Working Day") return false;
+    const weekday = new Date(`${day}T00:00:00Z`).getUTCDay();
+    return weekday === 0 || holidayType === "Public" || holidayType === "Company";
+  });
+};
+
+const isWithinNextMonth = (workedDate, leaveDate) => {
+  const worked = new Date(`${workedDate}T00:00:00Z`);
+  const leave = new Date(`${leaveDate}T00:00:00Z`);
+  if (!Number.isFinite(worked.getTime()) || !Number.isFinite(leave.getTime())) {
+    return false;
+  }
+  const monthDifference =
+    (leave.getUTCFullYear() - worked.getUTCFullYear()) * 12 +
+    leave.getUTCMonth() -
+    worked.getUTCMonth();
+  return leave > worked && monthDifference <= 1;
+};
+
+const isEligibleCompOffWorkedDate = async (workedDate) => {
+  const holiday = await Holiday.findOne({
+    holidayDate: workedDate,
+    status: "Active",
+  })
+    .select("holidayType")
+    .lean();
+  const weekday = new Date(`${workedDate}T00:00:00Z`).getUTCDay();
+  if (holiday?.holidayType === "Working Day") return false;
+  return (
+    weekday === 0 ||
+    holiday?.holidayType === "Public" ||
+    holiday?.holidayType === "Company"
+  );
+};
 
 const calculateDays = (fromDate, toDate) => {
   const start = new Date(fromDate);
@@ -181,26 +254,91 @@ const applyLeave = async (user_id, leaveData) => {
   if (["CL", "SL", "COMP_OFF"].includes(leaveType)) {
     totalDays = calculateDays(fromDate, toDate);
 
-    const approvedLeaves = await LeaveApply.find({
-      user_id,
-      businessYear,
-      leaveType,
-      status: "Approved",
-    });
+    if (leaveType === "COMP_OFF") {
+      if (totalDays !== 1) {
+        const error = new Error(
+          "A comp-off request can use one worked date for one leave day."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+      const workedDate = String(compOffDate || "").slice(0, 10);
+      const leaveDate = String(fromDate || "").slice(0, 10);
+      if (!isWithinNextMonth(workedDate, leaveDate)) {
+        const error = new Error(
+          "Comp-off leave must be taken after the worked date, in the same month or the following month."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
 
-    const usedDays = approvedLeaves.reduce(
-      (total, leave) => total + (Number(leave.totalDays) || 0),
-      0
-    );
-    const allowedDays =
-      leavePolicy[POLICY_LIMIT_KEY_MAP[leaveType]] || 0;
+      const earnedDates = await getCompOffEarnedDates(user_id, businessYear);
+      if (!(await isEligibleCompOffWorkedDate(workedDate))) {
+        const error = new Error(
+          "The worked date must be a Sunday or an active public/company holiday."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
 
-    if (usedDays + totalDays > allowedDays) {
-      const error = new Error(
-        `Insufficient leave balance. Remaining ${allowedDays - usedDays} day(s).`
+      const dateAlreadyUsed = await LeaveApply.exists({
+        user_id,
+        leaveType: "COMP_OFF",
+        compOffDate: workedDate,
+        status: { $in: ["Pending", "Approved"] },
+      });
+      if (dateAlreadyUsed) {
+        const error = new Error(
+          "This worked date has already been used for a comp-off request."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const approvedLeaves = await LeaveApply.find({
+        user_id,
+        businessYear,
+        leaveType,
+        status: "Approved",
+      });
+      const usedDays = approvedLeaves.reduce(
+        (total, leave) => total + (Number(leave.totalDays) || 0),
+        0
       );
-      error.statusCode = 400;
-      throw error;
+      const allowedDays =
+        (Number(leavePolicy.compensatoryOff) || 0) +
+        earnedDates.length +
+        (earnedDates.includes(workedDate) ? 0 : 1);
+      if (usedDays + totalDays > allowedDays) {
+        const error = new Error(
+          `Insufficient compensatory leave balance. You have ${Math.max(0, allowedDays - usedDays)} day(s) available.`
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+    } else {
+
+      const approvedLeaves = await LeaveApply.find({
+        user_id,
+        businessYear,
+        leaveType,
+        status: "Approved",
+      });
+
+      const usedDays = approvedLeaves.reduce(
+        (total, leave) => total + (Number(leave.totalDays) || 0),
+        0
+      );
+      const allowedDays =
+        leavePolicy[POLICY_LIMIT_KEY_MAP[leaveType]] || 0;
+
+      if (usedDays + totalDays > allowedDays) {
+        const error = new Error(
+          `Insufficient leave balance. Remaining ${allowedDays - usedDays} day(s).`
+        );
+        error.statusCode = 400;
+        throw error;
+      }
     }
   }
 
@@ -454,8 +592,44 @@ const reviewLeave = async (
       (total, leave) => total + (Number(leave.totalDays) || 0),
       0
     );
-    const allowedDays =
+    let allowedDays =
       leavePolicy[POLICY_LIMIT_KEY_MAP[leaveRequest.leaveType]] || 0;
+
+    if (leaveRequest.leaveType === "COMP_OFF") {
+      const workedDate = leaveRequest.compOffDate
+        ? new Date(leaveRequest.compOffDate).toISOString().slice(0, 10)
+        : "";
+      const earnedDates = await getCompOffEarnedDates(
+        leaveRequest.user_id,
+        leaveRequest.businessYear
+      );
+      const leaveDate = leaveRequest.fromDate
+        ? new Date(leaveRequest.fromDate).toISOString().slice(0, 10)
+        : "";
+      const dateAlreadyUsed = workedDate
+        ? await LeaveApply.exists({
+            user_id: leaveRequest.user_id,
+            leaveType: "COMP_OFF",
+            compOffDate: workedDate,
+            status: "Approved",
+            _id: { $ne: leaveId },
+          })
+        : true;
+      if (
+        !isWithinNextMonth(workedDate, leaveDate) ||
+        !(await isEligibleCompOffWorkedDate(workedDate)) ||
+        dateAlreadyUsed
+      ) {
+        const error = new Error(
+          "Cannot approve. The comp-off worked date must be a Sunday or an active public/company holiday, and it must not have already been used."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+      allowedDays +=
+        earnedDates.length +
+        (earnedDates.includes(workedDate) ? 0 : 1);
+    }
 
     if (usedDays + leaveRequest.totalDays > allowedDays) {
       const error = new Error(
@@ -618,7 +792,13 @@ const getLeaveBalance = async (user_id, businessYearParam) => {
 
   const totalCL = leavePolicy.casualLeave || 0;
   const totalSL = leavePolicy.sickLeave || 0;
-  const totalCompOff = leavePolicy.compensatoryOff || 0;
+  const earnedCompOffDates = await getCompOffEarnedDates(
+    user_id,
+    businessYear
+  );
+  const totalCompOff =
+    (Number(leavePolicy.compensatoryOff) || 0) +
+    earnedCompOffDates.length;
   const indiaDate = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
@@ -665,4 +845,5 @@ module.exports = {
   updateLeave,
   reviewLeave,
   getLeaveBalance,
+  getCompOffEarnedDates,
 };

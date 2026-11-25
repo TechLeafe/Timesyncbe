@@ -1,7 +1,9 @@
 const Employee = require("../employees/employee.model");
+require("../teams/team.model");
 const Attendance = require("../attendance/attendance.model");
 const Leave = require("../leaves/leave.model");
 const LeaveApply = require("../leaveApply/leaveApply.model");
+const { getCompOffEarnedDates } = require("../leaveApply/leaveApply.service");
 const Holiday = require("../holidays/holiday.model");
 
 const getToday = () => {
@@ -229,6 +231,7 @@ const getEmployeeDashboard = async (userId, date) => {
   const employee = await Employee.findOne({
     user_id: userId,
   })
+    .populate("team", "name")
     .select("-password")
     .lean();
 
@@ -366,9 +369,13 @@ const getEmployeeDashboard = async (userId, date) => {
     ? leavePolicy.sickLeave
     : 0;
 
-  const compOffAllocated = leavePolicy
-    ? leavePolicy.compensatoryOff
-    : 0;
+  const earnedCompOffDates = await getCompOffEarnedDates(
+    userId,
+    businessYear
+  );
+  const compOffAllocated =
+    (leavePolicy ? Number(leavePolicy.compensatoryOff) || 0 : 0) +
+    earnedCompOffDates.length;
 
   const permissionAllocated = 4;
 
@@ -465,7 +472,9 @@ const getEmployeeDashboard = async (userId, date) => {
       name: employee.name,
       email: employee.email,
       designation: employee.designation,
-      team: employee.team || "",
+      team:
+        employee.team?.name ||
+        (typeof employee.team === "string" ? employee.team : ""),
       status: employee.status,
     },
 

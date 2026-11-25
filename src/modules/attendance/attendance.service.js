@@ -270,7 +270,10 @@ const getPermissionCreditInfo = (
       total + (Number(permission.totalHours) || 0),
     0
   );
-  const approvedPermissionHours = eligibleSeconds / 3600;
+  // Once HR approves a permission request, credit its full requested duration
+  // toward attendance. The eligible interval can be shorter when it overlaps
+  // a recorded work session, but approval still grants the requested time.
+  const approvedPermissionHours = approvedPermissionRequestedHours;
   const statuses = [...new Set(permissions.map(({ status }) => status))];
 
   return {

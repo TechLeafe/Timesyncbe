@@ -2,7 +2,10 @@
 const nodemailer = require("nodemailer");
 const Employee = require("../employees/employee.model");
 
-// Allowed support subjects
+// ======================================
+// ALLOWED SUPPORT SUBJECTS
+// ======================================
+
 const ALLOWED_SUBJECTS = [
   "Attendance Issue",
   "Leave Request",
@@ -12,8 +15,50 @@ const ALLOWED_SUBJECTS = [
   "General HR Enquiry",
 ];
 
-// Send employee support email
+// ======================================
+// HTML ESCAPE
+// ======================================
+
+const escapeHtml = (value = "") =>
+  String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[char]));
+
+// ======================================
+// SMTP CONFIGURATION
+// ======================================
+
+const getSMTPConfig = () => {
+  const config = {
+    SMTP_HOST: process.env.SMTP_HOST?.trim(),
+    SMTP_PORT: process.env.SMTP_PORT?.trim(),
+    SMTP_USER: process.env.SMTP_USER?.trim(),
+    SMTP_PASSWORD: process.env.SMTP_PASSWORD,
+    SMTP_FROM: process.env.SMTP_FROM?.trim(),
+    HR_SUPPORT_EMAIL: process.env.HR_SUPPORT_EMAIL?.trim(),
+  };
+
+  const missingEnv = Object.keys(config).filter(
+    (key) => !config[key] || !String(config[key]).trim()
+  );
+
+  return {
+    config,
+    missingEnv,
+  };
+};
+
+// ======================================
+// SEND EMPLOYEE SUPPORT EMAIL
+// ======================================
+
 const sendSupportEmail = async (req, res) => {
+  let transporter;
+
   try {
     const { subject, message } = req.body || {};
 
@@ -40,7 +85,10 @@ const sendSupportEmail = async (req, res) => {
       });
     }
 
-    // Get logged-in employee ID from JWT
+    // ======================================
+    // EMPLOYEE AUTHENTICATION
+    // ======================================
+
     const loggedInEmployeeId = req.user?.id;
 
     if (!loggedInEmployeeId) {
@@ -50,7 +98,6 @@ const sendSupportEmail = async (req, res) => {
       });
     }
 
-    // Fetch logged-in employee details
     const employee = await Employee.findById(loggedInEmployeeId)
       .select("name employeeId email designation status")
       .lean();
@@ -62,7 +109,6 @@ const sendSupportEmail = async (req, res) => {
       });
     }
 
-    // Check active employee
     if (employee.status !== "Active") {
       return res.status(403).json({
         success: false,
@@ -70,7 +116,6 @@ const sendSupportEmail = async (req, res) => {
       });
     }
 
-    // Check employee email
     if (!employee.email) {
       return res.status(400).json({
         success: false,
@@ -78,75 +123,102 @@ const sendSupportEmail = async (req, res) => {
       });
     }
 
-    // Validate SMTP configuration
-    const requiredEnv = [
-      "SMTP_HOST",
-      "SMTP_PORT",
-      "SMTP_USER",
-      "SMTP_PASSWORD",
-      "SMTP_FROM",
-      "HR_SUPPORT_EMAIL",
-    ];
+    // ======================================
+    // VALIDATE SMTP CONFIGURATION
+    // ======================================
 
-    const missingEnv = requiredEnv.filter(
-      (key) => !process.env[key]
-    );
+    const { config, missingEnv } = getSMTPConfig();
+
+    console.log("SMTP Configuration Status:", {
+      SMTP_HOST: Boolean(config.SMTP_HOST),
+      SMTP_PORT: Boolean(config.SMTP_PORT),
+      SMTP_USER: Boolean(config.SMTP_USER),
+      SMTP_PASSWORD: Boolean(config.SMTP_PASSWORD),
+      SMTP_FROM: Boolean(config.SMTP_FROM),
+      HR_SUPPORT_EMAIL: Boolean(config.HR_SUPPORT_EMAIL),
+    });
 
     if (missingEnv.length > 0) {
-      console.error("Missing SMTP configuration:", missingEnv);
+      console.error(
+        "Missing SMTP environment variables:",
+        missingEnv.join(", ")
+      );
 
       return res.status(503).json({
         success: false,
-        message: "Support email service is not configured.",
+        code: "SMTP_NOT_CONFIGURED",
+        message:
+          "Support email service is not configured. Please contact the administrator.",
       });
     }
 
-    const smtpPort = Number(process.env.SMTP_PORT);
+    const smtpPort = Number(config.SMTP_PORT);
 
-    // Create SMTP transporter
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
+    if (![465, 587].includes(smtpPort)) {
+      console.error("Invalid SMTP port:", smtpPort);
+
+      return res.status(503).json({
+        success: false,
+        code: "INVALID_SMTP_PORT",
+        message: "Support email service configuration is invalid.",
+      });
+    }
+
+    // ======================================
+    // CREATE SMTP TRANSPORTER
+    // ======================================
+
+    transporter = nodemailer.createTransport({
+      host: config.SMTP_HOST,
       port: smtpPort,
+
       secure: smtpPort === 465,
-      requireTLS: smtpPort !== 465,
+      requireTLS: smtpPort === 587,
 
       auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
+        user: config.SMTP_USER,
+        pass: config.SMTP_PASSWORD,
+      },
+
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 20000,
+
+      tls: {
+        minVersion: "TLSv1.2",
+        rejectUnauthorized: true,
       },
     });
 
-    // Escape HTML to prevent HTML injection
-    const escapeHtml = (value = "") =>
-      String(value).replace(/[&<>"']/g, (char) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
-      }[char]));
+    // ======================================
+    // EMPLOYEE DETAILS
+    // ======================================
 
     const employeeName = escapeHtml(employee.name);
     const employeeId = escapeHtml(employee.employeeId || "-");
     const employeeEmail = escapeHtml(employee.email);
     const designation = escapeHtml(employee.designation || "-");
+
     const safeSubject = escapeHtml(subject);
     const safeMessage = escapeHtml(message.trim());
 
-    // Request date and time
     const requestDate = new Date().toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
       dateStyle: "medium",
       timeStyle: "short",
     });
 
-    // Email template
+    // ======================================
+    // EMAIL TEMPLATE
+    // ======================================
+
     const emailTemplate = `
       <div style="
         font-family: Arial, sans-serif;
         background-color: #f4f7fa;
         padding: 24px;
       ">
+
         <div style="
           max-width: 600px;
           margin: auto;
@@ -270,20 +342,22 @@ const sendSupportEmail = async (req, res) => {
           </div>
 
         </div>
+
       </div>
     `;
 
-    // Send email
+    // ======================================
+    // SEND EMAIL
+    // ======================================
+
     const info = await transporter.sendMail({
       from: {
         name: `${employee.name} - TimeSync HRMS`,
-        address: process.env.SMTP_FROM,
+        address: config.SMTP_FROM,
       },
 
-      // HR recipient
-      to: process.env.HR_SUPPORT_EMAIL,
+      to: config.HR_SUPPORT_EMAIL,
 
-      // Dynamic logged-in employee email
       replyTo: employee.email,
 
       subject: `[TimeSync HRMS] ${subject}`,
@@ -304,7 +378,11 @@ ${message.trim()}
       html: emailTemplate,
     });
 
-    console.log("Support email accepted:", info.messageId);
+    console.log("Support email accepted:", {
+      messageId: info.messageId,
+      acceptedCount: info.accepted?.length,
+      rejectedCount: info.rejected?.length,
+    });
 
     return res.status(200).json({
       success: true,
@@ -312,16 +390,63 @@ ${message.trim()}
     });
 
   } catch (error) {
+
+    // ======================================
+    // ERROR HANDLING
+    // ======================================
+
     console.error("Support email failed:", {
       code: error.code,
-      message: error.message,
-      response: error.response,
+      command: error.command,
+      responseCode: error.responseCode,
     });
+
+    // SMTP authentication error
+    if (error.code === "EAUTH") {
+      return res.status(503).json({
+        success: false,
+        code: "SMTP_AUTH_FAILED",
+        message:
+          "Support email authentication failed. Please contact HR.",
+      });
+    }
+
+    // SMTP connection errors
+    if (
+      ["ETIMEDOUT", "ECONNECTION", "ESOCKET", "ECONNREFUSED"].includes(
+        error.code
+      )
+    ) {
+      return res.status(503).json({
+        success: false,
+        code: "SMTP_CONNECTION_FAILED",
+        message:
+          "Unable to connect to the support email server. Please try again later.",
+      });
+    }
+
+    // SMTP hostname error
+    if (
+      ["ENOTFOUND", "EDNS", "EAI_AGAIN"].includes(error.code)
+    ) {
+      return res.status(503).json({
+        success: false,
+        code: "SMTP_HOST_ERROR",
+        message:
+          "Support email server is unavailable. Please contact HR.",
+      });
+    }
 
     return res.status(500).json({
       success: false,
-      message: "Unable to send support email. Please contact HR.",
+      message:
+        "Unable to send support email. Please contact HR.",
     });
+
+  } finally {
+    if (transporter) {
+      transporter.close();
+    }
   }
 };
 
