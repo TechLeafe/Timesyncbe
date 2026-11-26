@@ -1,12 +1,13 @@
-
-const nodemailer = require("nodemailer");
+const axios = require("axios");
 const Employee = require("../employees/employee.model");
 
-// ======================================
-// ALLOWED SUPPORT SUBJECTS
-// ======================================
+console.log("ZOHO MAIL CONTROLLER LOADED:", __filename);
 
-const ALLOWED_SUBJECTS = [
+/* ==========================================
+   SUPPORT SUBJECTS
+========================================== */
+
+const SUPPORT_SUBJECTS = [
   "Attendance Issue",
   "Leave Request",
   "Payroll / Salary",
@@ -15,91 +16,201 @@ const ALLOWED_SUBJECTS = [
   "General HR Enquiry",
 ];
 
-// ======================================
-// HTML ESCAPE
-// ======================================
+const MAX_MESSAGE_LENGTH = 5000;
 
-const escapeHtml = (value = "") =>
-  String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[char]));
+/* ==========================================
+   ZOHO TOKEN CACHE
+========================================== */
 
-// ======================================
-// SMTP CONFIGURATION
-// ======================================
+let cachedAccessToken = null;
+let tokenExpiresAt = 0;
+let refreshPromise = null;
 
-const getSMTPConfig = () => {
-  const config = {
-    SMTP_HOST: process.env.SMTP_HOST?.trim(),
-    SMTP_PORT: process.env.SMTP_PORT?.trim(),
-    SMTP_USER: process.env.SMTP_USER?.trim(),
-    SMTP_PASSWORD: process.env.SMTP_PASSWORD,
-    SMTP_FROM: process.env.SMTP_FROM?.trim(),
-    HR_SUPPORT_EMAIL: process.env.HR_SUPPORT_EMAIL?.trim(),
-  };
+/* ==========================================
+   ZOHO CONFIGURATION
+========================================== */
 
-  const missingEnv = Object.keys(config).filter(
-    (key) => !config[key] || !String(config[key]).trim()
-  );
+const getZohoConfig = () => ({
+  clientId: process.env.ZOHO_CLIENT_ID,
+  clientSecret: process.env.ZOHO_CLIENT_SECRET,
+  refreshToken: process.env.ZOHO_REFRESH_TOKEN,
+  accountId: process.env.ZOHO_ACCOUNT_ID,
 
-  return {
-    config,
-    missingEnv,
-  };
+  accountsUrl:
+    process.env.ZOHO_ACCOUNTS_URL ||
+    "https://accounts.zoho.in",
+
+  mailUrl:
+    process.env.ZOHO_MAIL_URL ||
+    "https://mail.zoho.in",
+
+  fromEmail: process.env.ZOHO_FROM_EMAIL,
+  supportEmail: process.env.HR_SUPPORT_EMAIL,
+});
+
+/* ==========================================
+   HTML ESCAPE
+========================================== */
+
+const escapeHtml = (value) => {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 };
 
-// ======================================
-// SEND EMPLOYEE SUPPORT EMAIL
-// ======================================
+/* ==========================================
+   GENERATE ZOHO ACCESS TOKEN
+========================================== */
 
-const sendSupportEmail = async (req, res) => {
-  let transporter;
+const getZohoAccessToken = async (config) => {
+  if (
+    cachedAccessToken &&
+    Date.now() < tokenExpiresAt
+  ) {
+    return cachedAccessToken;
+  }
+
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  refreshPromise = (async () => {
+    const params = new URLSearchParams();
+
+    params.append("client_id", config.clientId);
+    params.append("client_secret", config.clientSecret);
+    params.append("refresh_token", config.refreshToken);
+    params.append("grant_type", "refresh_token");
+
+    const response = await axios.post(
+      `${config.accountsUrl}/oauth/v2/token`,
+      params.toString(),
+      {
+        headers: {
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+        },
+        timeout: 15000,
+      }
+    );
+
+    const accessToken = response.data?.access_token;
+
+    if (!accessToken) {
+      const error = new Error(
+        "Unable to generate Zoho access token."
+      );
+
+      error.code = "ZOHO_AUTH_FAILED";
+
+      throw error;
+    }
+
+    cachedAccessToken = accessToken;
+
+    const expiresIn =
+      Number(response.data.expires_in) || 3600;
+
+    tokenExpiresAt =
+      Date.now() +
+      Math.max(0, expiresIn - 60) * 1000;
+
+    console.log(
+      "Zoho access token generated successfully"
+    );
+
+    return cachedAccessToken;
+  })();
 
   try {
-    const { subject, message } = req.body || {};
+    return await refreshPromise;
+  } finally {
+    refreshPromise = null;
+  }
+};
 
-    // Validate subject
-    if (!subject || !ALLOWED_SUBJECTS.includes(subject)) {
+/* ==========================================
+   SEND SUPPORT EMAIL
+========================================== */
+
+const sendSupportEmail = async (req, res) => {
+  console.log("ZOHO SUPPORT EMAIL API CALLED");
+
+  let stage = "validation";
+
+  try {
+    /* ==========================================
+       VALIDATE REQUEST
+    ========================================== */
+
+    const subject =
+      typeof req.body?.subject === "string"
+        ? req.body.subject.trim()
+        : "";
+
+    const message =
+      typeof req.body?.message === "string"
+        ? req.body.message.trim()
+        : "";
+
+    if (!subject) {
       return res.status(400).json({
         success: false,
-        message: "Please select a valid subject.",
+        message: "Please select a subject.",
       });
     }
 
-    // Validate message
-    if (typeof message !== "string" || !message.trim()) {
+    if (!SUPPORT_SUBJECTS.includes(subject)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid support subject.",
+      });
+    }
+
+    if (!message) {
       return res.status(400).json({
         success: false,
         message: "Please enter your message.",
       });
     }
 
-    if (message.trim().length > 5000) {
+    if (message.length > MAX_MESSAGE_LENGTH) {
       return res.status(400).json({
         success: false,
-        message: "Message cannot exceed 5000 characters.",
+        message:
+          "Message cannot exceed 5000 characters.",
       });
     }
 
-    // ======================================
-    // EMPLOYEE AUTHENTICATION
-    // ======================================
+    /* ==========================================
+       VALIDATE EMPLOYEE
+    ========================================== */
 
-    const loggedInEmployeeId = req.user?.id;
+    const employeeId =
+      req.user?.id || req.user?._id;
 
-    if (!loggedInEmployeeId) {
+    if (
+      !employeeId ||
+      !/^[a-fA-F0-9]{24}$/.test(String(employeeId))
+    ) {
       return res.status(401).json({
         success: false,
-        message: "Unauthorized. Please login again.",
+        message:
+          "Invalid employee session. Please login again.",
       });
     }
 
-    const employee = await Employee.findById(loggedInEmployeeId)
-      .select("name employeeId email designation status")
+    stage = "employee";
+
+    const employee = await Employee.findById(
+      employeeId
+    )
+      .select(
+        "name employeeId email designation status"
+      )
       .lean();
 
     if (!employee) {
@@ -109,346 +220,399 @@ const sendSupportEmail = async (req, res) => {
       });
     }
 
-    if (employee.status !== "Active") {
+    if (
+      String(employee.status).toLowerCase() !==
+      "active"
+    ) {
       return res.status(403).json({
         success: false,
         message: "Employee account is inactive.",
       });
     }
 
-    if (!employee.email) {
-      return res.status(400).json({
-        success: false,
-        message: "Employee email is not available.",
-      });
-    }
+    /* ==========================================
+       CHECK ZOHO CONFIGURATION
+    ========================================== */
 
-    // ======================================
-    // VALIDATE SMTP CONFIGURATION
-    // ======================================
+    stage = "configuration";
 
-    const { config, missingEnv } = getSMTPConfig();
+    const config = getZohoConfig();
 
-    console.log("SMTP Configuration Status:", {
-      SMTP_HOST: Boolean(config.SMTP_HOST),
-      SMTP_PORT: Boolean(config.SMTP_PORT),
-      SMTP_USER: Boolean(config.SMTP_USER),
-      SMTP_PASSWORD: Boolean(config.SMTP_PASSWORD),
-      SMTP_FROM: Boolean(config.SMTP_FROM),
-      HR_SUPPORT_EMAIL: Boolean(config.HR_SUPPORT_EMAIL),
-    });
+    const requiredConfig = {
+      ZOHO_CLIENT_ID: config.clientId,
+      ZOHO_CLIENT_SECRET: config.clientSecret,
+      ZOHO_REFRESH_TOKEN: config.refreshToken,
+      ZOHO_ACCOUNT_ID: config.accountId,
+      ZOHO_FROM_EMAIL: config.fromEmail,
+      HR_SUPPORT_EMAIL: config.supportEmail,
+    };
 
-    if (missingEnv.length > 0) {
+    const missingConfig = Object.entries(
+      requiredConfig
+    )
+      .filter(([, value]) => !value?.trim())
+      .map(([key]) => key);
+
+    if (missingConfig.length > 0) {
       console.error(
-        "Missing SMTP environment variables:",
-        missingEnv.join(", ")
+        "Missing Zoho configuration:",
+        missingConfig
       );
 
       return res.status(503).json({
         success: false,
-        code: "SMTP_NOT_CONFIGURED",
+        code: "ZOHO_NOT_CONFIGURED",
         message:
           "Support email service is not configured. Please contact the administrator.",
       });
     }
 
-    const smtpPort = Number(config.SMTP_PORT);
+    /* ==========================================
+       GENERATE ACCESS TOKEN
+    ========================================== */
 
-    if (![465, 587].includes(smtpPort)) {
-      console.error("Invalid SMTP port:", smtpPort);
+    stage = "authentication";
 
-      return res.status(503).json({
-        success: false,
-        code: "INVALID_SMTP_PORT",
-        message: "Support email service configuration is invalid.",
-      });
-    }
+    const accessToken =
+      await getZohoAccessToken(config);
 
-    // ======================================
-    // CREATE SMTP TRANSPORTER
-    // ======================================
+    /* ==========================================
+       EMPLOYEE DETAILS
+    ========================================== */
 
-    transporter = nodemailer.createTransport({
-      host: config.SMTP_HOST,
-      port: smtpPort,
+    const employeeName = escapeHtml(
+      employee.name || "Employee"
+    );
 
-      secure: smtpPort === 465,
-      requireTLS: smtpPort === 587,
+    const employeeCode = escapeHtml(
+      employee.employeeId || "N/A"
+    );
 
-      auth: {
-        user: config.SMTP_USER,
-        pass: config.SMTP_PASSWORD,
-      },
+    const employeeEmail = escapeHtml(
+      employee.email || "N/A"
+    );
 
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 20000,
-
-      tls: {
-        minVersion: "TLSv1.2",
-        rejectUnauthorized: true,
-      },
-    });
-
-    // ======================================
-    // EMPLOYEE DETAILS
-    // ======================================
-
-    const employeeName = escapeHtml(employee.name);
-    const employeeId = escapeHtml(employee.employeeId || "-");
-    const employeeEmail = escapeHtml(employee.email);
-    const designation = escapeHtml(employee.designation || "-");
+    const designation = escapeHtml(
+      employee.designation || "N/A"
+    );
 
     const safeSubject = escapeHtml(subject);
-    const safeMessage = escapeHtml(message.trim());
 
-    const requestDate = new Date().toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
+    const safeMessage = escapeHtml(message)
+      .replace(/\r\n|\r|\n/g, "<br />");
 
-    // ======================================
-    // EMAIL TEMPLATE
-    // ======================================
+    const submittedAt = escapeHtml(
+      new Date().toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        dateStyle: "medium",
+        timeStyle: "short",
+      })
+    );
 
-    const emailTemplate = `
-      <div style="
-        font-family: Arial, sans-serif;
-        background-color: #f4f7fa;
-        padding: 24px;
+    /* ==========================================
+       EMAIL TEMPLATE
+    ========================================== */
+
+    const emailContent = `
+      <!DOCTYPE html>
+      <html>
+      <body style="
+        margin:0;
+        padding:24px;
+        background:#f4f7fa;
+        font-family:Arial,sans-serif;
+        color:#17263b;
       ">
 
         <div style="
-          max-width: 600px;
-          margin: auto;
-          background: #ffffff;
-          border-radius: 12px;
-          overflow: hidden;
-          border: 1px solid #e5e7eb;
+          max-width:650px;
+          margin:auto;
+          background:#ffffff;
+          border:1px solid #e2e8f0;
+          border-radius:12px;
+          overflow:hidden;
         ">
 
           <div style="
-            background: #025B82;
-            color: #ffffff;
-            padding: 24px;
+            background:#025B82;
+            padding:24px;
+            color:#ffffff;
           ">
-            <h2 style="margin: 0;">
+            <h2 style="margin:0;">
               TimeSync HRMS
             </h2>
 
-            <p style="margin: 8px 0 0;">
+            <p style="margin:8px 0 0;">
               Employee Support Request
             </p>
           </div>
 
-          <div style="padding: 24px;">
+          <div style="padding:24px;">
 
-            <h3 style="color: #025B82;">
+            <h3 style="color:#025B82;">
               ${safeSubject}
             </h3>
 
             <p>Dear HR Team,</p>
 
             <p>
-              A new support request has been submitted
-              by an employee.
+              A new employee support request
+              has been submitted.
             </p>
 
             <table style="
-              width: 100%;
-              border-collapse: collapse;
-              font-size: 14px;
+              width:100%;
+              border-collapse:collapse;
+              font-size:14px;
             ">
 
               <tr>
-                <td style="padding: 10px; background: #f1f5f9;">
-                  <strong>Employee Name</strong>
+                <td style="padding:10px;background:#f4f7fa;">
+                  Employee Name
                 </td>
-                <td style="padding: 10px;">
+                <td style="padding:10px;">
                   ${employeeName}
                 </td>
               </tr>
 
               <tr>
-                <td style="padding: 10px; background: #f1f5f9;">
-                  <strong>Employee ID</strong>
+                <td style="padding:10px;background:#f4f7fa;">
+                  Employee ID
                 </td>
-                <td style="padding: 10px;">
-                  ${employeeId}
+                <td style="padding:10px;">
+                  ${employeeCode}
                 </td>
               </tr>
 
               <tr>
-                <td style="padding: 10px; background: #f1f5f9;">
-                  <strong>Employee Email</strong>
+                <td style="padding:10px;background:#f4f7fa;">
+                  Email Address
                 </td>
-                <td style="padding: 10px;">
+                <td style="padding:10px;">
                   ${employeeEmail}
                 </td>
               </tr>
 
               <tr>
-                <td style="padding: 10px; background: #f1f5f9;">
-                  <strong>Designation</strong>
+                <td style="padding:10px;background:#f4f7fa;">
+                  Designation
                 </td>
-                <td style="padding: 10px;">
+                <td style="padding:10px;">
                   ${designation}
                 </td>
               </tr>
 
               <tr>
-                <td style="padding: 10px; background: #f1f5f9;">
-                  <strong>Request Date</strong>
+                <td style="padding:10px;background:#f4f7fa;">
+                  Subject
                 </td>
-                <td style="padding: 10px;">
-                  ${requestDate}
+                <td style="padding:10px;">
+                  ${safeSubject}
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding:10px;background:#f4f7fa;">
+                  Submitted At
+                </td>
+                <td style="padding:10px;">
+                  ${submittedAt} IST
                 </td>
               </tr>
 
             </table>
 
-            <h3 style="color: #025B82; margin-top: 24px;">
+            <h3 style="
+              margin-top:24px;
+              color:#025B82;
+            ">
               Employee Message
             </h3>
 
             <div style="
-              background: #f8fafc;
-              padding: 18px;
-              border-radius: 8px;
-              border-left: 4px solid #025B82;
-              line-height: 1.7;
-              white-space: pre-wrap;
-              overflow-wrap: anywhere;
-            ">${safeMessage}</div>
+              padding:16px;
+              background:#f4f7fa;
+              border-left:4px solid #025B82;
+              border-radius:6px;
+              line-height:1.7;
+              overflow-wrap:anywhere;
+            ">
+              ${safeMessage}
+            </div>
 
-            <p style="margin-top: 24px;">
+            <p style="margin-top:24px;">
               Regards,<br />
-              <strong>${employeeName}</strong><br />
-              ${designation}
+              <strong>TimeSync HRMS</strong>
             </p>
 
           </div>
 
           <div style="
-            padding: 16px;
-            background: #f1f5f9;
-            text-align: center;
-            color: #64748b;
-            font-size: 12px;
+            padding:16px;
+            background:#f4f7fa;
+            text-align:center;
+            font-size:12px;
+            color:#64748b;
           ">
-            This email was generated by TimeSync HRMS.
-            Reply to this email to contact the employee.
+            This is an automated email from
+            TimeSync HRMS Employee Support.
           </div>
 
         </div>
 
-      </div>
+      </body>
+      </html>
     `;
 
-    // ======================================
-    // SEND EMAIL
-    // ======================================
+    /* ==========================================
+       SEND EMAIL USING ZOHO HTTPS API
+    ========================================== */
 
-    const info = await transporter.sendMail({
-      from: {
-        name: `${employee.name} - TimeSync HRMS`,
-        address: config.SMTP_FROM,
-      },
+    stage = "send-email";
 
-      to: config.HR_SUPPORT_EMAIL,
+    const zohoApiUrl =
+      `${config.mailUrl}/api/accounts/` +
+      `${encodeURIComponent(config.accountId)}/messages`;
 
-      replyTo: employee.email,
+    const emailPayload = {
+      fromAddress: config.fromEmail,
+      toAddress: config.supportEmail,
 
-      subject: `[TimeSync HRMS] ${subject}`,
+      subject:
+        `[TimeSync Support] ${subject} - ` +
+        `${String(employee.name || "Employee")
+          .replace(/[\r\n]/g, " ")}`,
 
-      text: `
-Employee Name: ${employee.name}
-Employee ID: ${employee.employeeId || "-"}
-Employee Email: ${employee.email}
-Designation: ${employee.designation || "-"}
-Request Date: ${requestDate}
+      content: emailContent,
+      mailFormat: "html",
+      encoding: "UTF-8",
+      askReceipt: "no",
+    };
 
-Subject: ${subject}
+    console.log("Sending support email using Zoho API");
 
-Message:
-${message.trim()}
-      `,
+    const zohoResponse = await axios.post(
+      zohoApiUrl,
+      emailPayload,
+      {
+        headers: {
+          Authorization:
+            `Zoho-oauthtoken ${accessToken}`,
 
-      html: emailTemplate,
-    });
+          "Content-Type": "application/json",
+        },
 
-    console.log("Support email accepted:", {
-      messageId: info.messageId,
-      acceptedCount: info.accepted?.length,
-      rejectedCount: info.rejected?.length,
-    });
+        timeout: 20000,
+      }
+    );
+
+    /* ==========================================
+       VERIFY ZOHO RESPONSE
+    ========================================== */
+
+    if (
+      Number(zohoResponse.data?.status?.code) !== 200
+    ) {
+      const error = new Error(
+        "Zoho Mail rejected the email request."
+      );
+
+      error.code = "ZOHO_EMAIL_FAILED";
+
+      throw error;
+    }
+
+    console.log(
+      "Support email sent successfully"
+    );
+
+    /* ==========================================
+       SUCCESS RESPONSE
+    ========================================== */
 
     return res.status(200).json({
       success: true,
-      message: "Your support request has been sent successfully.",
+      message:
+        "Support request sent successfully.",
     });
 
   } catch (error) {
+    /* ==========================================
+       ERROR HANDLING
+    ========================================== */
 
-    // ======================================
-    // ERROR HANDLING
-    // ======================================
+    const status = error.response?.status;
 
-    console.error("Support email failed:", {
+    console.error("Support email error:", {
+      stage,
       code: error.code,
-      command: error.command,
-      responseCode: error.responseCode,
+      status,
     });
 
-    // SMTP authentication error
-    if (error.code === "EAUTH") {
+    if (
+      stage === "authentication" ||
+      error.code === "ZOHO_AUTH_FAILED" ||
+      status === 401 ||
+      status === 403
+    ) {
+      cachedAccessToken = null;
+      tokenExpiresAt = 0;
+
       return res.status(503).json({
         success: false,
-        code: "SMTP_AUTH_FAILED",
+        code: "ZOHO_AUTH_FAILED",
         message:
-          "Support email authentication failed. Please contact HR.",
+          "Support email authentication failed. Please contact the administrator.",
       });
     }
 
-    // SMTP connection errors
     if (
-      ["ETIMEDOUT", "ECONNECTION", "ESOCKET", "ECONNREFUSED"].includes(
-        error.code
-      )
+      error.code === "ECONNABORTED" ||
+      error.code === "ETIMEDOUT"
     ) {
-      return res.status(503).json({
+      return res.status(504).json({
         success: false,
-        code: "SMTP_CONNECTION_FAILED",
+        code: "ZOHO_API_TIMEOUT",
         message:
-          "Unable to connect to the support email server. Please try again later.",
+          "Support email server timed out. Please try again later.",
       });
     }
 
-    // SMTP hostname error
     if (
-      ["ENOTFOUND", "EDNS", "EAI_AGAIN"].includes(error.code)
+      error.code === "ECONNREFUSED" ||
+      error.code === "ECONNRESET" ||
+      error.code === "ENOTFOUND" ||
+      error.code === "EAI_AGAIN"
     ) {
       return res.status(503).json({
         success: false,
-        code: "SMTP_HOST_ERROR",
+        code: "ZOHO_CONNECTION_FAILED",
         message:
-          "Support email server is unavailable. Please contact HR.",
+          "Unable to connect to the Zoho email server. Please try again later.",
+      });
+    }
+
+    if (status === 429) {
+      return res.status(429).json({
+        success: false,
+        code: "ZOHO_RATE_LIMIT",
+        message:
+          "Too many email requests. Please try again later.",
       });
     }
 
     return res.status(500).json({
       success: false,
+      code: "ZOHO_EMAIL_FAILED",
       message:
-        "Unable to send support email. Please contact HR.",
+        "Unable to send support request. Please try again later.",
     });
-
-  } finally {
-    if (transporter) {
-      transporter.close();
-    }
   }
 };
+
+/* ==========================================
+   EXPORT CONTROLLER
+========================================== */
 
 module.exports = {
   sendSupportEmail,
