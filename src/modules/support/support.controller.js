@@ -31,21 +31,33 @@ let refreshPromise = null;
 ========================================== */
 
 const getZohoConfig = () => ({
-  clientId: process.env.ZOHO_CLIENT_ID,
-  clientSecret: process.env.ZOHO_CLIENT_SECRET,
-  refreshToken: process.env.ZOHO_REFRESH_TOKEN,
-  accountId: process.env.ZOHO_ACCOUNT_ID,
+  clientId: (
+    process.env.ZOHO_CLIENT_ID || ""
+  ).trim(),
 
-  accountsUrl:
-    process.env.ZOHO_ACCOUNTS_URL ||
-    "https://accounts.zoho.in",
+  clientSecret: (
+    process.env.ZOHO_CLIENT_SECRET || ""
+  ).trim(),
 
-  mailUrl:
-    process.env.ZOHO_MAIL_URL ||
-    "https://mail.zoho.in",
+  refreshToken: (
+    process.env.ZOHO_REFRESH_TOKEN || ""
+  ).trim(),
 
-  fromEmail: process.env.ZOHO_FROM_EMAIL,
-  supportEmail: process.env.HR_SUPPORT_EMAIL,
+  accountId: (
+    process.env.ZOHO_ACCOUNT_ID || ""
+  ).trim(),
+
+  accountsUrl: "https://accounts.zoho.in",
+
+  mailUrl: "https://mail.zoho.in",
+
+  fromEmail: (
+    process.env.ZOHO_FROM_EMAIL || ""
+  ).trim(),
+
+  supportEmail: (
+    process.env.HR_SUPPORT_EMAIL || ""
+  ).trim(),
 });
 
 /* ==========================================
@@ -78,51 +90,109 @@ const getZohoAccessToken = async (config) => {
   }
 
   refreshPromise = (async () => {
+    const tokenUrl =
+      `${config.accountsUrl}/oauth/v2/token`;
+
+    console.log("ZOHO TOKEN URL:", tokenUrl);
+
     const params = new URLSearchParams();
 
-    params.append("client_id", config.clientId);
-    params.append("client_secret", config.clientSecret);
-    params.append("refresh_token", config.refreshToken);
-    params.append("grant_type", "refresh_token");
-
-    const response = await axios.post(
-      `${config.accountsUrl}/oauth/v2/token`,
-      params.toString(),
-      {
-        headers: {
-          "Content-Type":
-            "application/x-www-form-urlencoded",
-        },
-        timeout: 15000,
-      }
+    params.append(
+      "client_id",
+      config.clientId
     );
 
-    const accessToken = response.data?.access_token;
+    params.append(
+      "client_secret",
+      config.clientSecret
+    );
 
-    if (!accessToken) {
-      const error = new Error(
-        "Unable to generate Zoho access token."
+    params.append(
+      "refresh_token",
+      config.refreshToken
+    );
+
+    params.append(
+      "grant_type",
+      "refresh_token"
+    );
+
+    try {
+      const response = await axios.post(
+        tokenUrl,
+        params.toString(),
+        {
+          headers: {
+            "Content-Type":
+              "application/x-www-form-urlencoded",
+          },
+          timeout: 60000,
+          maxRedirects: 0,
+        }
       );
 
-      error.code = "ZOHO_AUTH_FAILED";
+      /* CHECK ZOHO OAUTH ERROR */
+
+      if (response.data?.error) {
+        console.error(
+          "ZOHO OAUTH ERROR:",
+          response.data.error
+        );
+
+        const error = new Error(
+          "Zoho OAuth authentication failed."
+        );
+
+        error.code = "ZOHO_AUTH_FAILED";
+
+        throw error;
+      }
+
+      const accessToken =
+        response.data?.access_token;
+
+      if (!accessToken) {
+        const error = new Error(
+          "Zoho access token not received."
+        );
+
+        error.code = "ZOHO_AUTH_FAILED";
+
+        throw error;
+      }
+
+      /* CACHE ACCESS TOKEN */
+
+      cachedAccessToken = accessToken;
+
+      const expiresIn =
+        Number(response.data.expires_in) ||
+        3600;
+
+      tokenExpiresAt =
+        Date.now() +
+        Math.max(0, expiresIn - 60) * 1000;
+
+      console.log(
+        "Zoho access token generated successfully"
+      );
+
+      return cachedAccessToken;
+
+    } catch (error) {
+      console.error(
+        "ZOHO TOKEN REQUEST FAILED:",
+        {
+          url: tokenUrl,
+          status: error.response?.status,
+          code: error.code,
+          zohoError:
+            error.response?.data?.error || null,
+        }
+      );
 
       throw error;
     }
-
-    cachedAccessToken = accessToken;
-
-    const expiresIn =
-      Number(response.data.expires_in) || 3600;
-
-    tokenExpiresAt =
-      Date.now() +
-      Math.max(0, expiresIn - 60) * 1000;
-
-    console.log(
-      "Zoho access token generated successfully"
-    );
-
-    return cachedAccessToken;
   })();
 
   try {
@@ -186,7 +256,7 @@ const sendSupportEmail = async (req, res) => {
     }
 
     /* ==========================================
-       VALIDATE EMPLOYEE
+       VALIDATE EMPLOYEE SESSION
     ========================================== */
 
     const employeeId =
@@ -194,7 +264,9 @@ const sendSupportEmail = async (req, res) => {
 
     if (
       !employeeId ||
-      !/^[a-fA-F0-9]{24}$/.test(String(employeeId))
+      !/^[a-fA-F0-9]{24}$/.test(
+        String(employeeId)
+      )
     ) {
       return res.status(401).json({
         success: false,
@@ -202,6 +274,10 @@ const sendSupportEmail = async (req, res) => {
           "Invalid employee session. Please login again.",
       });
     }
+
+    /* ==========================================
+       GET EMPLOYEE DETAILS
+    ========================================== */
 
     stage = "employee";
 
@@ -226,7 +302,8 @@ const sendSupportEmail = async (req, res) => {
     ) {
       return res.status(403).json({
         success: false,
-        message: "Employee account is inactive.",
+        message:
+          "Employee account is inactive.",
       });
     }
 
@@ -240,17 +317,27 @@ const sendSupportEmail = async (req, res) => {
 
     const requiredConfig = {
       ZOHO_CLIENT_ID: config.clientId,
-      ZOHO_CLIENT_SECRET: config.clientSecret,
-      ZOHO_REFRESH_TOKEN: config.refreshToken,
-      ZOHO_ACCOUNT_ID: config.accountId,
-      ZOHO_FROM_EMAIL: config.fromEmail,
-      HR_SUPPORT_EMAIL: config.supportEmail,
+
+      ZOHO_CLIENT_SECRET:
+        config.clientSecret,
+
+      ZOHO_REFRESH_TOKEN:
+        config.refreshToken,
+
+      ZOHO_ACCOUNT_ID:
+        config.accountId,
+
+      ZOHO_FROM_EMAIL:
+        config.fromEmail,
+
+      HR_SUPPORT_EMAIL:
+        config.supportEmail,
     };
 
     const missingConfig = Object.entries(
       requiredConfig
     )
-      .filter(([, value]) => !value?.trim())
+      .filter(([, value]) => !value)
       .map(([key]) => key);
 
     if (missingConfig.length > 0) {
@@ -267,6 +354,30 @@ const sendSupportEmail = async (req, res) => {
       });
     }
 
+    /* SAFE CONFIGURATION LOG */
+
+    console.log("ZOHO CONFIGURATION:", {
+      clientIdConfigured:
+        Boolean(config.clientId),
+
+      clientSecretConfigured:
+        Boolean(config.clientSecret),
+
+      refreshTokenConfigured:
+        Boolean(config.refreshToken),
+
+      accountIdConfigured:
+        Boolean(config.accountId),
+
+      accountsUrl: config.accountsUrl,
+
+      mailUrl: config.mailUrl,
+
+      fromEmail: config.fromEmail,
+
+      supportEmail: config.supportEmail,
+    });
+
     /* ==========================================
        GENERATE ACCESS TOKEN
     ========================================== */
@@ -277,7 +388,7 @@ const sendSupportEmail = async (req, res) => {
       await getZohoAccessToken(config);
 
     /* ==========================================
-       EMPLOYEE DETAILS
+       PREPARE EMPLOYEE DETAILS
     ========================================== */
 
     const employeeName = escapeHtml(
@@ -296,7 +407,8 @@ const sendSupportEmail = async (req, res) => {
       employee.designation || "N/A"
     );
 
-    const safeSubject = escapeHtml(subject);
+    const safeSubject =
+      escapeHtml(subject);
 
     const safeMessage = escapeHtml(message)
       .replace(/\r\n|\r|\n/g, "<br />");
@@ -316,6 +428,7 @@ const sendSupportEmail = async (req, res) => {
     const emailContent = `
       <!DOCTYPE html>
       <html>
+
       <body style="
         margin:0;
         padding:24px;
@@ -333,11 +446,14 @@ const sendSupportEmail = async (req, res) => {
           overflow:hidden;
         ">
 
+          <!-- EMAIL HEADER -->
+
           <div style="
             background:#025B82;
             padding:24px;
             color:#ffffff;
           ">
+
             <h2 style="margin:0;">
               TimeSync HRMS
             </h2>
@@ -345,7 +461,10 @@ const sendSupportEmail = async (req, res) => {
             <p style="margin:8px 0 0;">
               Employee Support Request
             </p>
+
           </div>
+
+          <!-- EMAIL CONTENT -->
 
           <div style="padding:24px;">
 
@@ -360,6 +479,8 @@ const sendSupportEmail = async (req, res) => {
               has been submitted.
             </p>
 
+            <!-- EMPLOYEE DETAILS TABLE -->
+
             <table style="
               width:100%;
               border-collapse:collapse;
@@ -367,60 +488,86 @@ const sendSupportEmail = async (req, res) => {
             ">
 
               <tr>
-                <td style="padding:10px;background:#f4f7fa;">
+                <td style="
+                  padding:10px;
+                  background:#f4f7fa;
+                ">
                   Employee Name
                 </td>
+
                 <td style="padding:10px;">
                   ${employeeName}
                 </td>
               </tr>
 
               <tr>
-                <td style="padding:10px;background:#f4f7fa;">
+                <td style="
+                  padding:10px;
+                  background:#f4f7fa;
+                ">
                   Employee ID
                 </td>
+
                 <td style="padding:10px;">
                   ${employeeCode}
                 </td>
               </tr>
 
               <tr>
-                <td style="padding:10px;background:#f4f7fa;">
+                <td style="
+                  padding:10px;
+                  background:#f4f7fa;
+                ">
                   Email Address
                 </td>
+
                 <td style="padding:10px;">
                   ${employeeEmail}
                 </td>
               </tr>
 
               <tr>
-                <td style="padding:10px;background:#f4f7fa;">
+                <td style="
+                  padding:10px;
+                  background:#f4f7fa;
+                ">
                   Designation
                 </td>
+
                 <td style="padding:10px;">
                   ${designation}
                 </td>
               </tr>
 
               <tr>
-                <td style="padding:10px;background:#f4f7fa;">
+                <td style="
+                  padding:10px;
+                  background:#f4f7fa;
+                ">
                   Subject
                 </td>
+
                 <td style="padding:10px;">
                   ${safeSubject}
                 </td>
               </tr>
 
               <tr>
-                <td style="padding:10px;background:#f4f7fa;">
+                <td style="
+                  padding:10px;
+                  background:#f4f7fa;
+                ">
                   Submitted At
                 </td>
+
                 <td style="padding:10px;">
                   ${submittedAt} IST
                 </td>
               </tr>
 
             </table>
+
+            <!-- EMPLOYEE MESSAGE -->
 
             <h3 style="
               margin-top:24px;
@@ -447,6 +594,8 @@ const sendSupportEmail = async (req, res) => {
 
           </div>
 
+          <!-- EMAIL FOOTER -->
+
           <div style="
             padding:16px;
             background:#f4f7fa;
@@ -454,8 +603,10 @@ const sendSupportEmail = async (req, res) => {
             font-size:12px;
             color:#64748b;
           ">
+
             This is an automated email from
             TimeSync HRMS Employee Support.
+
           </div>
 
         </div>
@@ -465,31 +616,39 @@ const sendSupportEmail = async (req, res) => {
     `;
 
     /* ==========================================
-       SEND EMAIL USING ZOHO HTTPS API
+       SEND EMAIL USING ZOHO MAIL API
     ========================================== */
 
     stage = "send-email";
 
     const zohoApiUrl =
       `${config.mailUrl}/api/accounts/` +
-      `${encodeURIComponent(config.accountId)}/messages`;
+      `${encodeURIComponent(config.accountId)}` +
+      `/messages`;
 
     const emailPayload = {
       fromAddress: config.fromEmail,
+
       toAddress: config.supportEmail,
 
       subject:
         `[TimeSync Support] ${subject} - ` +
-        `${String(employee.name || "Employee")
-          .replace(/[\r\n]/g, " ")}`,
+        `${String(
+          employee.name || "Employee"
+        ).replace(/[\r\n]/g, " ")}`,
 
       content: emailContent,
+
       mailFormat: "html",
+
       encoding: "UTF-8",
+
       askReceipt: "no",
     };
 
-    console.log("Sending support email using Zoho API");
+    console.log(
+      "Sending support email using Zoho API"
+    );
 
     const zohoResponse = await axios.post(
       zohoApiUrl,
@@ -499,10 +658,13 @@ const sendSupportEmail = async (req, res) => {
           Authorization:
             `Zoho-oauthtoken ${accessToken}`,
 
-          "Content-Type": "application/json",
+          "Content-Type":
+            "application/json",
         },
 
         timeout: 20000,
+
+        maxRedirects: 0,
       }
     );
 
@@ -511,8 +673,18 @@ const sendSupportEmail = async (req, res) => {
     ========================================== */
 
     if (
-      Number(zohoResponse.data?.status?.code) !== 200
+      Number(
+        zohoResponse.data?.status?.code
+      ) !== 200
     ) {
+      console.error(
+        "ZOHO MAIL REJECTED REQUEST:",
+        {
+          status:
+            zohoResponse.data?.status?.code,
+        }
+      );
+
       const error = new Error(
         "Zoho Mail rejected the email request."
       );
@@ -541,30 +713,45 @@ const sendSupportEmail = async (req, res) => {
        ERROR HANDLING
     ========================================== */
 
-    const status = error.response?.status;
+    const status =
+      error.response?.status;
 
     console.error("Support email error:", {
       stage,
+
       code: error.code,
+
       status,
+
+      zohoError:
+        error.response?.data?.error || null,
+
+      zohoStatus:
+        error.response?.data?.status?.code ||
+        null,
     });
 
-    if (
-      stage === "authentication" ||
-      error.code === "ZOHO_AUTH_FAILED" ||
-      status === 401 ||
-      status === 403
-    ) {
-      cachedAccessToken = null;
-      tokenExpiresAt = 0;
+    /* ==========================================
+       API ENDPOINT NOT FOUND
+    ========================================== */
 
+    if (
+      stage === "authentication" &&
+      status === 404
+    ) {
       return res.status(503).json({
         success: false,
-        code: "ZOHO_AUTH_FAILED",
+
+        code: "ZOHO_AUTH_ENDPOINT_NOT_FOUND",
+
         message:
-          "Support email authentication failed. Please contact the administrator.",
+          "Zoho authentication endpoint is unavailable. Please contact the administrator.",
       });
     }
+
+    /* ==========================================
+       API TIMEOUT
+    ========================================== */
 
     if (
       error.code === "ECONNABORTED" ||
@@ -572,11 +759,17 @@ const sendSupportEmail = async (req, res) => {
     ) {
       return res.status(504).json({
         success: false,
+
         code: "ZOHO_API_TIMEOUT",
+
         message:
           "Support email server timed out. Please try again later.",
       });
     }
+
+    /* ==========================================
+       NETWORK CONNECTION ERROR
+    ========================================== */
 
     if (
       error.code === "ECONNREFUSED" ||
@@ -586,24 +779,81 @@ const sendSupportEmail = async (req, res) => {
     ) {
       return res.status(503).json({
         success: false,
+
         code: "ZOHO_CONNECTION_FAILED",
+
         message:
           "Unable to connect to the Zoho email server. Please try again later.",
       });
     }
 
+    /* ==========================================
+       RATE LIMIT ERROR
+    ========================================== */
+
     if (status === 429) {
       return res.status(429).json({
         success: false,
+
         code: "ZOHO_RATE_LIMIT",
+
         message:
           "Too many email requests. Please try again later.",
       });
     }
 
+    /* ==========================================
+       AUTHENTICATION ERROR
+    ========================================== */
+
+    if (
+      stage === "authentication" ||
+      error.code === "ZOHO_AUTH_FAILED" ||
+      (
+        stage === "send-email" &&
+        status === 401
+      )
+    ) {
+      cachedAccessToken = null;
+      tokenExpiresAt = 0;
+
+      return res.status(503).json({
+        success: false,
+
+        code: "ZOHO_AUTH_FAILED",
+
+        message:
+          "Support email authentication failed. Please contact the administrator.",
+      });
+    }
+
+    /* ==========================================
+       EMAIL PERMISSION ERROR
+    ========================================== */
+
+    if (
+      stage === "send-email" &&
+      status === 403
+    ) {
+      return res.status(503).json({
+        success: false,
+
+        code: "ZOHO_PERMISSION_DENIED",
+
+        message:
+          "Zoho Mail permission denied. Please contact the administrator.",
+      });
+    }
+
+    /* ==========================================
+       GENERAL ERROR
+    ========================================== */
+
     return res.status(500).json({
       success: false,
+
       code: "ZOHO_EMAIL_FAILED",
+
       message:
         "Unable to send support request. Please try again later.",
     });
