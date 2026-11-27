@@ -1,26 +1,37 @@
-
 const BirthdayCreation = require("./birthdayCreation.model");
 
-// Create birthday
+// ==========================================
+// CREATE BIRTHDAY
+// ==========================================
+
 const createBirthday = async (data) => {
   return BirthdayCreation.create(data);
 };
 
-// Get all birthdays
+// ==========================================
+// GET ALL BIRTHDAYS
+// ==========================================
+
 const getAllBirthdays = async () => {
   return BirthdayCreation.find().sort({
     createdAt: -1,
   });
 };
 
-// Get birthday by Employee ID
+// ==========================================
+// GET BIRTHDAY BY EMPLOYEE ID
+// ==========================================
+
 const getBirthdayById = async (employeeId) => {
   return BirthdayCreation.findOne({
     employeeId,
   });
 };
 
-// Update birthday by Employee ID
+// ==========================================
+// UPDATE BIRTHDAY
+// ==========================================
+
 const updateBirthday = async (employeeId, data) => {
   return BirthdayCreation.findOneAndUpdate(
     { employeeId },
@@ -32,7 +43,10 @@ const updateBirthday = async (employeeId, data) => {
   );
 };
 
-// Delete birthday by Employee ID
+// ==========================================
+// DELETE BIRTHDAY
+// ==========================================
+
 const deleteBirthday = async (employeeId) => {
   return BirthdayCreation.findOneAndDelete({
     employeeId,

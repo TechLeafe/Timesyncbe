@@ -1,13 +1,16 @@
 const service = require("./birthdayCreation.service");
 
-// Error handler
+// ==========================================
+// ERROR HANDLER
+// ==========================================
+
 const handleError = (res, error) => {
   console.error("Birthday Creation Error:", error);
 
   if (error.code === 11000) {
     return res.status(409).json({
       success: false,
-      message: "Employee ID already exists",
+      message: "Birthday record already exists",
     });
   }
 
@@ -27,110 +30,101 @@ const handleError = (res, error) => {
   });
 };
 
-// Validate create/update data
+// ==========================================
+// VALIDATE BIRTHDAY
+// ==========================================
+
 const validateBirthday = (body) => {
-  if (
-    !body ||
-    typeof body.employeeName !== "string" ||
-    !body.employeeName.trim() ||
-    typeof body.employeeId !== "string" ||
-    !body.employeeId.trim() ||
-    typeof body.dob !== "string" ||
-    !body.dob.trim()
-  ) {
-    return "Employee name, Employee ID and DOB are required";
+  const employeeName = String(body.employeeName || "").trim();
+  const employeeId = String(body.employeeId || "").trim();
+  const dob = String(body.dob || "").trim();
+
+  if (!employeeName || !employeeId || !dob) {
+    return "Employee name, employee ID and DOB are required";
   }
 
-  // Require YYYY-MM-DD format
-  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
-
-  if (!datePattern.test(body.dob)) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) {
     return "DOB must be in YYYY-MM-DD format";
   }
 
-  const dob = new Date(`${body.dob}T00:00:00.000Z`);
+  const date = new Date(dob);
 
   if (
-    Number.isNaN(dob.getTime()) ||
-    dob.toISOString().slice(0, 10) !== body.dob
+    Number.isNaN(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== dob
   ) {
     return "Invalid date of birth";
   }
 
-  if (dob > new Date()) {
+  if (date > new Date()) {
     return "Date of birth cannot be in the future";
   }
 
   return null;
 };
 
+// ==========================================
 // CREATE BIRTHDAY
+// ==========================================
+
 exports.create = async (req, res) => {
   try {
-    const error = validateBirthday(req.body);
+    const validationError = validateBirthday(req.body);
 
-    if (error) {
+    if (validationError) {
       return res.status(400).json({
         success: false,
-        message: error,
+        message: validationError,
       });
     }
 
-    const { employeeName, employeeId, dob } = req.body;
-
-    const existing = await service.getBirthdayById(
-      employeeId.trim()
-    );
-
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: "Employee ID already exists",
-      });
-    }
-
-    const data = await service.createBirthday({
-      employeeName: employeeName.trim(),
-      employeeId: employeeId.trim(),
-      dob,
+    const birthday = await service.createBirthday({
+      employeeName: req.body.employeeName.trim(),
+      employeeId: req.body.employeeId.trim(),
+      dob: new Date(req.body.dob),
     });
 
     return res.status(201).json({
       success: true,
       message: "Birthday created successfully",
-      data,
+      data: birthday,
     });
   } catch (error) {
     return handleError(res, error);
   }
 };
 
+// ==========================================
 // GET ALL BIRTHDAYS
+// ==========================================
+
 exports.list = async (req, res) => {
   try {
-    const data = await service.getAllBirthdays();
+    const birthdays = await service.getAllBirthdays();
 
     return res.status(200).json({
       success: true,
-      message: "Birthday records fetched successfully",
-      count: data.length,
-      data,
+      count: birthdays.length,
+      data: birthdays,
     });
   } catch (error) {
     return handleError(res, error);
   }
 };
 
+// ==========================================
 // GET BIRTHDAY BY EMPLOYEE ID
+// ==========================================
+
 exports.getById = async (req, res) => {
   try {
     const employeeId = req.params.id.trim();
 
-    const data = await service.getBirthdayById(
-      employeeId
-    );
+    console.log("Birthday GetById:", employeeId);
 
-    if (!data) {
+    const birthday = await service.getBirthdayById(employeeId);
+
+    if (!birthday) {
       return res.status(404).json({
         success: false,
         message: "Birthday record not found",
@@ -139,44 +133,40 @@ exports.getById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Birthday record fetched successfully",
-      data,
+      data: birthday,
     });
   } catch (error) {
     return handleError(res, error);
   }
 };
 
-// UPDATE BIRTHDAY BY EMPLOYEE ID
+// ==========================================
+// UPDATE BIRTHDAY
+// ==========================================
+
 exports.update = async (req, res) => {
   try {
     const employeeId = req.params.id.trim();
 
-    const error = validateBirthday(req.body);
+    const validationError = validateBirthday(req.body);
 
-    if (error) {
+    if (validationError) {
       return res.status(400).json({
         success: false,
-        message: error,
+        message: validationError,
       });
     }
 
-    const {
-      employeeName,
-      employeeId: newEmployeeId,
-      dob,
-    } = req.body;
-
-    const data = await service.updateBirthday(
+    const birthday = await service.updateBirthday(
       employeeId,
       {
-        employeeName: employeeName.trim(),
-        employeeId: newEmployeeId.trim(),
-        dob,
+        employeeName: req.body.employeeName.trim(),
+        employeeId: req.body.employeeId.trim(),
+        dob: new Date(req.body.dob),
       }
     );
 
-    if (!data) {
+    if (!birthday) {
       return res.status(404).json({
         success: false,
         message: "Birthday record not found",
@@ -186,23 +176,24 @@ exports.update = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Birthday updated successfully",
-      data,
+      data: birthday,
     });
   } catch (error) {
     return handleError(res, error);
   }
 };
 
-// DELETE BIRTHDAY BY EMPLOYEE ID
+// ==========================================
+// DELETE BIRTHDAY
+// ==========================================
+
 exports.remove = async (req, res) => {
   try {
     const employeeId = req.params.id.trim();
 
-    const data = await service.deleteBirthday(
-      employeeId
-    );
+    const birthday = await service.deleteBirthday(employeeId);
 
-    if (!data) {
+    if (!birthday) {
       return res.status(404).json({
         success: false,
         message: "Birthday record not found",
@@ -212,10 +203,116 @@ exports.remove = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Birthday deleted successfully",
-      data: {
-        employeeId: data.employeeId,
-      },
     });
+  } catch (error) {
+    return handleError(res, error);
+  }
+};
+
+// ==========================================
+// GET UPCOMING BIRTHDAYS
+// ==========================================
+
+exports.upcoming = async (req, res) => {
+  try {
+    console.log("Upcoming Birthday API Called");
+
+    const birthdays = await service.getAllBirthdays();
+
+    // Current date in Indian timezone
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+
+    const getPart = (type) =>
+      Number(parts.find((part) => part.type === type).value);
+
+    const currentYear = getPart("year");
+
+    const today = new Date(
+      Date.UTC(
+        currentYear,
+        getPart("month") - 1,
+        getPart("day")
+      )
+    );
+
+    // Handle February 29 in non-leap years
+    const getBirthdayDate = (year, month, day) => {
+      const lastDay = new Date(
+        Date.UTC(year, month + 1, 0)
+      ).getUTCDate();
+
+      return new Date(
+        Date.UTC(year, month, Math.min(day, lastDay))
+      );
+    };
+
+    const upcomingBirthdays = birthdays
+      .filter((employee) => {
+        return (
+          employee.dob &&
+          !Number.isNaN(new Date(employee.dob).getTime())
+        );
+      })
+      .map((employee) => {
+        const dob = new Date(employee.dob);
+
+        const month = dob.getUTCMonth();
+        const day = dob.getUTCDate();
+
+        let nextBirthday = getBirthdayDate(
+          currentYear,
+          month,
+          day
+        );
+
+        // Birthday already completed this year
+        if (nextBirthday < today) {
+          nextBirthday = getBirthdayDate(
+            currentYear + 1,
+            month,
+            day
+          );
+        }
+
+        const daysRemaining = Math.round(
+          (nextBirthday.getTime() - today.getTime()) /
+            86400000
+        );
+
+        return {
+          _id: employee._id,
+          employeeName: employee.employeeName,
+          employeeId: employee.employeeId,
+
+          birthday: nextBirthday
+            .toISOString()
+            .slice(0, 10),
+
+          formattedBirthday:
+            nextBirthday.toLocaleDateString("en-US", {
+              month: "short",
+              day: "2-digit",
+              timeZone: "UTC",
+            }),
+
+          daysRemaining,
+          isToday: daysRemaining === 0,
+        };
+      })
+      .sort((a, b) => a.daysRemaining - b.daysRemaining);
+
+    return res.status(200).json({
+      success: true,
+      message: "Upcoming birthdays fetched successfully",
+      count: upcomingBirthdays.length,
+      data: upcomingBirthdays,
+    });
+
   } catch (error) {
     return handleError(res, error);
   }

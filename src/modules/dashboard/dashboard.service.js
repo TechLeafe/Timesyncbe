@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Employee = require("../employees/employee.model");
 const Team = require("../teams/team.model");
 const Attendance = require("../attendance/attendance.model");
@@ -450,49 +451,38 @@ const getAdminDashboard = async (date) => {
 // EMPLOYEE DASHBOARD
 // ==================================================
 
-const getEmployeeDashboard = async (
-  userId,
-  date
-) => {
+const getEmployeeDashboard = async (employeeMongoId, date) => {
   const selectedDate = getSelectedDate(date);
+  const businessYear = getBusinessYear(selectedDate);
 
-  const businessYear =
-    getBusinessYear(selectedDate);
-
-  // --------------------------------------------------
-  // VALIDATE USER ID
-  // --------------------------------------------------
-
-  if (
-    userId === undefined ||
-    userId === null ||
-    userId === ""
-  ) {
-    const error = new Error(
-      "Employee user ID is required"
-    );
-
-    error.statusCode = 400;
+  if (typeof employeeMongoId !== "string" ||
+      !/^[a-fA-F0-9]{24}$/.test(employeeMongoId) ||
+      !mongoose.isValidObjectId(employeeMongoId)) {
+    const error = new Error("Invalid employee ID. Please login again");
+    error.statusCode = 401;
     throw error;
   }
 
-  // --------------------------------------------------
-  // EMPLOYEE DETAILS
-  // FIX: REMOVED POPULATE TEAM
-  // --------------------------------------------------
-
-  const employee = await Employee.findOne({
-    user_id: userId,
-  })
+  const employee = await Employee.findById(employeeMongoId)
     .select("-password")
     .lean();
 
   if (!employee) {
-    const error = new Error(
-      "Employee not found"
-    );
-
+    const error = new Error("Employee not found");
     error.statusCode = 404;
+    throw error;
+  }
+
+  if (employee.status !== "Active" || employee.userType !== 3) {
+    const error = new Error("Access denied");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const userId = employee.user_id;
+  if (typeof userId !== "string" || !userId.trim()) {
+    const error = new Error("Employee user ID is missing");
+    error.statusCode = 400;
     throw error;
   }
 

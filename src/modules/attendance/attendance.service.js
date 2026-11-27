@@ -1042,12 +1042,22 @@ const formatAttendanceWithPermissions = async (attendances) => {
       asOf
     );
     const actualWorkingSeconds = Number(attendance.currentWorkingSeconds) || 0;
+    let attendanceStatus = attendance.attendanceStatus;
+    if (attendance.checkOutTime &&
+        !attendance.attendanceStatusManuallyCorrected &&
+        !["Approved", "Rejected"].includes(attendance.approvalStatus)) {
+      attendanceStatus = getSuggestedAttendanceStatus(
+        attendance, asOf, permissionCredit.approvedPermissionHours,
+        permissionCredit.lateArrivalUncoveredMinutes
+      );
+    }
     const monthlyPermissionUsedHours =
       monthlyUsage.get(`${attendance.user_id}:${attendance.day.slice(0, 7)}`) || 0;
     const employee = employeeByUser.get(attendance.user_id);
 
     return {
       ...attendance,
+      attendanceStatus,
       employeeName: employee?.name || "",
       employeeId: employee?.employeeId || attendance.employeeId,
       actualWorkingSeconds,
@@ -1394,13 +1404,14 @@ const correctAttendanceStatus = async (
     throw error;
   }
 
-  const allowedCorrections = {
-    Absent: ["Present"],
-    Present: ["Absent"],
-    "Half-Day Present": ["Present"],
-    Pending: ["Present"],
-    "Late Present": ["Present"],
-  };
+ const allowedCorrections = {
+  Absent: ["Present"],
+  Present: ["Absent"],
+  "Half-Day Present": ["Present"],
+  Pending: ["Present"],
+  "Late Present": ["Present"],
+  "Present Late": ["Present"],
+};
   if (
     !Object.prototype.hasOwnProperty.call(
       allowedCorrections,
@@ -1409,7 +1420,7 @@ const correctAttendanceStatus = async (
     !allowedCorrections[currentStatus].includes(newStatus)
   ) {
     const error = new Error(
-      "Attendance can only be changed from Absent to Present, Present to Absent, or Half-Day Present, Pending, or Late Present to Present"
+      "Attendance can only be changed from Absent to Present, Present to Absent, or Half-Day Present, Pending, Late Present, or Present Late to Present"
     );
     error.statusCode = 400;
     throw error;

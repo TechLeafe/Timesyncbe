@@ -1,22 +1,74 @@
-
 const express = require("express");
-const router = express.Router();
 
 const controller = require("./birthdayCreation.controller");
 
-// Create birthday
-router.post("/create", controller.create);
+const authMiddleware = require("../../middleware/auth.middleware");
 
-// List all birthdays
-router.get("/list", controller.list);
+const router = express.Router();
 
-// Get birthday by Employee ID
-router.get("/:id", controller.getById);
+// ==========================================
+// AUTHENTICATION
+// ==========================================
 
-// Update birthday by Employee ID
-router.put("/:id", controller.update);
+router.use(authMiddleware);
 
-// Delete birthday by Employee ID
-router.delete("/:id", controller.remove);
+// ==========================================
+// ADMIN AND HR PERMISSION
+// ==========================================
+
+const authorizeAdminHR = (req, res, next) => {
+  const userType = Number(req.user?.userType);
+
+  if (![1, 2].includes(userType)) {
+    return res.status(403).json({
+      success: false,
+      message: "Only Admin and HR can manage birthdays",
+    });
+  }
+
+  next();
+};
+
+// ==========================================
+// BIRTHDAY VIEW PERMISSION
+// ==========================================
+
+const authorizeBirthdayView = (req, res, next) => {
+  const userType = Number(req.user?.userType);
+
+  if (![1, 2, 3].includes(userType)) {
+    return res.status(403).json({
+      success: false,
+      message: "Access denied",
+    });
+  }
+
+  next();
+};
+
+// ==========================================
+// UPCOMING BIRTHDAYS
+// IMPORTANT: BEFORE /:id
+// ==========================================
+
+router.get(
+  "/upcoming",
+  authorizeBirthdayView,
+  controller.upcoming
+);
+
+// ==========================================
+// BIRTHDAY CREATION CRUD
+// ==========================================
+
+router.get("/", authorizeAdminHR, controller.list);
+
+router.post("/", authorizeAdminHR, controller.create);
+
+router.get("/:id", authorizeAdminHR, controller.getById);
+
+router.put("/:id", authorizeAdminHR, controller.update);
+
+router.delete("/:id", authorizeAdminHR, controller.remove);
 
 module.exports = router;
