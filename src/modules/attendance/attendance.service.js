@@ -944,6 +944,7 @@ const formatAttendance = (attendance) => {
     : attendance;
   if (
     data.day === getToday() &&
+    data.checkInTime &&
     !data.finalizedAt &&
     !data.checkOutTime &&
     !data.attendanceStatusManuallyCorrected
@@ -1409,77 +1410,65 @@ const correctAttendanceStatus = async (
     throw error;
   }
 
- const allowedCorrections = {
-  Absent: ["Present"],
-  Present: ["Absent"],
-  "Half-Day Present": ["Present"],
-  Pending: ["Present"],
-  "Late Present": ["Present"],
-  "Present Late": ["Present"],
-};
-  if (
-    !Object.prototype.hasOwnProperty.call(
-      allowedCorrections,
-      currentStatus
-    ) ||
-    !allowedCorrections[currentStatus].includes(newStatus)
-  ) {
-    const error = new Error(
-      "Attendance can only be changed from Absent to Present, Present to Absent, or Half-Day Present, Pending, Late Present, or Present Late to Present"
-    );
+  const normalize = (value) => {
+    const key = String(value ?? "").trim().toLowerCase();
+    return ({
+      present: "Present", absent: "Absent", pending: "Pending",
+      "half-day present": "Half-Day Present",
+      "late present": "Late Present", "present late": "Late Present",
+    })[key] || key;
+  };
+  const allowedCorrections = {
+    Absent: ["Present"],
+    Present: ["Absent"],
+    "Half-Day Present": ["Present"],
+    Pending: ["Present", "Absent"],
+    "Late Present": ["Present"],
+  };
+  const expected = normalize(currentStatus);
+  const target = normalize(newStatus);
+  if (!allowedCorrections[expected] ||
+      (expected !== target && !allowedCorrections[expected].includes(target))) {
+    const error = new Error("Invalid attendance status correction");
     error.statusCode = 400;
     throw error;
   }
-
-  if (!cleanReason || cleanReason.length > 1000) {
-    const error = new Error(
-      "A correction reason of 1 to 1000 characters is required"
-    );
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const modifiedAt = new Date();
-  const attendance = await Attendance.findOneAndUpdate(
-    {
-      user_id: cleanUserId,
-      day: cleanDay,
-      attendanceStatus: currentStatus,
-    },
-    {
-      $set: {
-        attendanceStatus: newStatus,
-        attendanceStatusManuallyCorrected: true,
-      },
-      $push: {
-        attendanceCorrections: {
-          hrUserId,
-          previousStatus: currentStatus,
-          newStatus,
-          reason: cleanReason,
-          modifiedAt,
-        },
-      },
-    },
-    { new: true, runValidators: true }
-  );
-
-  if (attendance) return attendance;
-
-  const existingAttendance = await Attendance.findOne({
-    user_id: cleanUserId,
-    day: cleanDay,
-  }).select("attendanceStatus");
-
-  if (!existingAttendance) {
+  const existing = await Attendance.findOne({ user_id: cleanUserId, day: cleanDay }).lean();
+  if (!existing) {
     const error = new Error("Attendance record was not found for this employee and date");
     error.statusCode = 404;
     throw error;
   }
-
-  const error = new Error(
-    `Attendance status is ${existingAttendance.attendanceStatus}; expected ${currentStatus}`
+  const stored = existing.attendanceStatus;
+  const [formatted] = await formatAttendanceWithPermissions([{ ...existing, attendanceStatus: stored ?? "Pending" }]);
+  if (expected !== normalize(stored ?? "Pending") && expected !== normalize(formatted.attendanceStatus)) {
+    const error = new Error("Attendance status has changed. Refresh and try again.");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (expected === target && normalize(stored) === target) return existing;
+  if (!cleanReason || cleanReason.length > 1000) {
+    const error = new Error("A correction reason of 1 to 1000 characters is required");
+    error.statusCode = 400;
+    throw error;
+  }
+  const attendance = await Attendance.findOneAndUpdate(
+    {
+      _id: existing._id,
+      attendanceStatus: stored === undefined ? { $exists: false } : stored,
+      updatedAt: existing.updatedAt === undefined ? { $exists: false } : existing.updatedAt,
+    },
+    {
+      $set: { attendanceStatus: target, attendanceStatusManuallyCorrected: true },
+      $push: { attendanceCorrections: {
+        hrUserId, previousStatus: stored ?? "Pending", newStatus: target,
+        reason: cleanReason, modifiedAt: new Date(),
+      } },
+    },
+    { new: true, runValidators: true }
   );
+  if (attendance) return attendance;
+  const error = new Error("Attendance changed during correction. Refresh and try again.");
   error.statusCode = 409;
   throw error;
 };
