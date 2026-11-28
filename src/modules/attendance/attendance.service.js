@@ -1058,6 +1058,8 @@ const formatAttendanceWithPermissions = async (attendances) => {
     return {
       ...attendance,
       attendanceStatus,
+      // Persisted status used for optimistic concurrency during HR correction.
+      storedAttendanceStatus: attendance.attendanceStatus,
       employeeName: employee?.name || "",
       employeeId: employee?.employeeId || attendance.employeeId,
       actualWorkingSeconds,
