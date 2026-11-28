@@ -991,7 +991,10 @@ const formatAttendance = (attendance) => {
 };
 
 const formatAttendanceWithPermissions = async (attendances) => {
-  const formatted = attendances.map(formatAttendance);
+  const formatted = attendances.map((attendance) => {
+    const storedAttendanceStatus = attendance.attendanceStatus;
+    return { ...formatAttendance(attendance), storedAttendanceStatus };
+  });
   if (formatted.length === 0) return formatted;
 
   const days = formatted.map((attendance) => attendance.day).sort();
@@ -1059,7 +1062,7 @@ const formatAttendanceWithPermissions = async (attendances) => {
       ...attendance,
       attendanceStatus,
       // Persisted status used for optimistic concurrency during HR correction.
-      storedAttendanceStatus: attendance.attendanceStatus,
+      storedAttendanceStatus: attendance.storedAttendanceStatus,
       employeeName: employee?.name || "",
       employeeId: employee?.employeeId || attendance.employeeId,
       actualWorkingSeconds,
